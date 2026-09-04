@@ -1,5 +1,0 @@
-streamlit>=1.36
-pandas>=2.0
-gspread>=6.0
-google-auth>=2.29
-bcrypt>=4.1
