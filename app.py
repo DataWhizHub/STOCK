@@ -675,8 +675,11 @@ def render_entry(df_office, user, office):
             errors.append("Sub Category 1")
         if not to_from.strip():
             errors.append("To/From")
-        if event_type == "Issue" and current_balance is not None and current_balance <= 0:
-            errors.append("Cannot issue - current stock for this item is 0")
+        if event_type == "Issue" and current_balance is not None:
+            if current_balance <= 0:
+                errors.append("Cannot issue - current stock for this item is 0")
+            elif quantity > current_balance:
+                errors.append(f"Cannot issue {quantity:g} - only {current_balance:g} in stock for this item")
         if errors:
             st.error("Please fix the following: " + ", ".join(errors))
             return
