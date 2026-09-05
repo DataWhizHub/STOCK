@@ -431,6 +431,20 @@ def pending_incoming_transfers(office: str) -> pd.DataFrame:
 # =========================================================
 # SHARED UI HELPERS
 # =========================================================
+def _dependent_options(df: pd.DataFrame, column: str, filters: dict) -> list:
+    """Options for a dependent field: narrowed by whichever parent
+    fields are currently selected. If none of the parents are selected
+    yet (e.g. right after the form resets), fall back to every value
+    ever used for this office instead of an empty list."""
+    mask = pd.Series(True, index=df.index)
+    applied = False
+    for col, val in filters.items():
+        if val:
+            mask &= df[col] == val
+            applied = True
+    return df.loc[mask, column].tolist() if applied else df[column].tolist()
+
+
 def selectbox_with_add(label: str, options: list, key: str, required: bool = True) -> str:
     options = sorted({o for o in options if o})
     choice_list = [PLACEHOLDER] + options + [ADD_NEW]
@@ -625,18 +639,18 @@ def render_entry(df_office, user, office):
 
     main_cat = selectbox_with_add("Main Category", df_office["Main Category"].tolist(), "re_main_cat")
 
-    sub1_options = df_office.loc[df_office["Main Category"] == main_cat, "Sub Category 1"].tolist() if main_cat else []
+    sub1_options = _dependent_options(df_office, "Sub Category 1", {"Main Category": main_cat})
     sub1 = selectbox_with_add("Sub Category 1", sub1_options, "re_sub1")
 
-    sub2_options = df_office.loc[
-        (df_office["Main Category"] == main_cat) & (df_office["Sub Category 1"] == sub1), "Sub Category 2"
-    ].tolist() if sub1 else []
+    sub2_options = _dependent_options(
+        df_office, "Sub Category 2", {"Main Category": main_cat, "Sub Category 1": sub1}
+    )
     sub2 = selectbox_with_add("Sub Category 2", sub2_options, "re_sub2", required=False)
 
-    sub3_options = df_office.loc[
-        (df_office["Main Category"] == main_cat) & (df_office["Sub Category 1"] == sub1)
-        & (df_office["Sub Category 2"] == sub2), "Sub Category 3"
-    ].tolist() if sub1 else []
+    sub3_options = _dependent_options(
+        df_office, "Sub Category 3",
+        {"Main Category": main_cat, "Sub Category 1": sub1, "Sub Category 2": sub2},
+    )
     sub3 = selectbox_with_add("Sub Category 3", sub3_options, "re_sub3", required=False)
 
     c3, c4 = st.columns(2)
