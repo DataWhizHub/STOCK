@@ -36,14 +36,14 @@ USERS_SHEET = "Users"
 TRANSFERS_SHEET = "Transfers"
 
 STOCK_HEADERS = [
-    "Event Type", "Date", "Main Category", "Sub Category 1", "Sub Category 2",
+    "Event Type", "Date", "Main Category", "Sub Category 1", "Sub Category 2", "Sub Category 3",
     "Quantity", "UOM", "GRN NO", "To/From", "Description",
     "Office", "Entered By", "Timestamp",
 ]
 USER_HEADERS = ["Office", "Name", "Username", "PasswordHash", "UpdatedAt"]
 TRANSFER_HEADERS = [
     "TransferID", "From Office", "To Office", "Date", "Main Category",
-    "Sub Category 1", "Sub Category 2", "Quantity", "UOM", "GRN NO", "Description",
+    "Sub Category 1", "Sub Category 2", "Sub Category 3", "Quantity", "UOM", "GRN NO", "Description",
     "Status", "Issued By", "Issued At", "Received By", "Received At",
 ]
 
@@ -78,6 +78,22 @@ def _get_spreadsheet():
     return _get_client().open_by_key(st.secrets["sheet_id"])
 
 
+def _migrate_add_column(ws, headers: list, after: str, new_col: str) -> None:
+    """If a sheet was created before `new_col` existed, insert it right
+    after `after` (shifting later columns right) instead of leaving new
+    writes misaligned with the old header row. Existing rows simply get
+    a blank value in the new column."""
+    current = ws.row_values(1)
+    if not current:
+        ws.append_row(headers)
+        return
+    if current == headers:
+        return
+    if new_col not in current and after in current:
+        idx = current.index(after)  # 0-based
+        ws.insert_cols([[new_col]], idx + 2)  # insert right after `after`
+
+
 @st.cache_resource(show_spinner=False)
 def _get_stock_ws():
     sh = _get_spreadsheet()
@@ -86,8 +102,8 @@ def _get_stock_ws():
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=STOCK_SHEET, rows=2000, cols=len(STOCK_HEADERS) + 2)
         ws.append_row(STOCK_HEADERS)
-    if not ws.row_values(1):
-        ws.append_row(STOCK_HEADERS)
+        return ws
+    _migrate_add_column(ws, STOCK_HEADERS, "Sub Category 2", "Sub Category 3")
     return ws
 
 
@@ -116,8 +132,8 @@ def _get_transfers_ws():
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=TRANSFERS_SHEET, rows=2000, cols=len(TRANSFER_HEADERS) + 2)
         ws.append_row(TRANSFER_HEADERS)
-    if not ws.row_values(1):
-        ws.append_row(TRANSFER_HEADERS)
+        return ws
+    _migrate_add_column(ws, TRANSFER_HEADERS, "Sub Category 2", "Sub Category 3")
     return ws
 
 
@@ -153,7 +169,7 @@ def load_stock() -> pd.DataFrame:
 
     df["Quantity"] = pd.to_numeric(df["Quantity"], errors="coerce").fillna(0.0)
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    text_cols = ["Sub Category 1", "Sub Category 2", "UOM", "To/From", "Description",
+    text_cols = ["Sub Category 1", "Sub Category 2", "Sub Category 3", "UOM", "To/From", "Description",
                  "Main Category", "GRN NO", "Office", "Entered By", "Event Type"]
     for col in text_cols:
         df[col] = df[col].fillna("").astype(str).str.strip()
@@ -179,7 +195,7 @@ def append_stock_entry(row: dict) -> None:
 def update_stock_row(row_number: int, row: dict) -> None:
     ws = _get_stock_ws()
     values = [row.get(h, "") for h in STOCK_HEADERS]
-    last_col = chr(ord("A") + len(STOCK_HEADERS) - 1)  # 13 headers -> "M"
+    last_col = chr(ord("A") + len(STOCK_HEADERS) - 1)
     ws.update(f"A{row_number}:{last_col}{row_number}", [values])
     _clear_stock_caches()
 
@@ -188,6 +204,18 @@ def delete_stock_row(row_number: int) -> None:
     ws = _get_stock_ws()
     ws.delete_rows(row_number)
     _clear_stock_caches()
+
+
+def compute_current_balance(df_office: pd.DataFrame, main_cat: str, sub1: str, sub2: str, sub3: str):
+    """Signed running balance for one exact category combination, or
+    None if the combination isn't fully chosen yet."""
+    if not main_cat or not sub1:
+        return None
+    sign = df_office["Event Type"].map(SIGN_MAP).fillna(1)
+    mask = (df_office["Main Category"] == main_cat) & (df_office["Sub Category 1"] == sub1)
+    mask &= (df_office["Sub Category 2"] == sub2) if sub2 else (df_office["Sub Category 2"] == "")
+    mask &= (df_office["Sub Category 3"] == sub3) if sub3 else (df_office["Sub Category 3"] == "")
+    return (df_office.loc[mask, "Quantity"] * sign[mask]).sum()
 
 
 # =========================================================
@@ -367,7 +395,7 @@ def mark_transfer_received(transfer_row: dict, received_by: str) -> None:
     updated["Received By"] = received_by
     updated["Received At"] = datetime.now().isoformat(timespec="seconds")
     values = [updated.get(h, "") for h in TRANSFER_HEADERS]
-    last_col = chr(ord("A") + len(TRANSFER_HEADERS) - 1)  # 16 headers -> "P"
+    last_col = chr(ord("A") + len(TRANSFER_HEADERS) - 1)
     ws.update(f"A{row_number}:{last_col}{row_number}", [values])
     _clear_transfer_caches()
 
@@ -381,6 +409,7 @@ def mark_transfer_received(transfer_row: dict, received_by: str) -> None:
         "Main Category": transfer_row["Main Category"],
         "Sub Category 1": transfer_row["Sub Category 1"],
         "Sub Category 2": transfer_row["Sub Category 2"],
+        "Sub Category 3": transfer_row.get("Sub Category 3", ""),
         "Quantity": transfer_row["Quantity"],
         "UOM": transfer_row["UOM"],
         "GRN NO": transfer_row.get("GRN NO", ""),
@@ -425,99 +454,149 @@ def _fmt_num(v) -> str:
     return f"{v:.0f}" if v == int(v) else f"{v:g}"
 
 
+# ---------- generic 1/2/3-level stock pivot ----------
 def compute_pivot_and_balance(data: pd.DataFrame, as_of: pd.Timestamp):
+    """
+    Builds a pivot with as many sub-category levels as this Main
+    Category actually uses: just Sub Category 1 if that's all anyone
+    ever filled in for it, Sub1+Sub2 if Sub2 is sometimes used, or
+    Sub1+Sub2+Sub3 if Sub3 is ever used (missing Sub2/Sub3 on a given
+    row falls back to "General" so the table still lines up).
+    """
     data = data.copy()
-    data.loc[data["Sub Category 2"] == "", "Sub Category 2"] = "General"
+    sub2_used = data["Sub Category 2"].astype(str).str.strip().ne("").any()
+    sub3_used = data["Sub Category 3"].astype(str).str.strip().ne("").any()
+
+    if sub3_used:
+        levels = ["Sub Category 1", "Sub Category 2", "Sub Category 3"]
+        data.loc[data["Sub Category 2"].astype(str).str.strip() == "", "Sub Category 2"] = "General"
+        data.loc[data["Sub Category 3"].astype(str).str.strip() == "", "Sub Category 3"] = "General"
+    elif sub2_used:
+        levels = ["Sub Category 1", "Sub Category 2"]
+        data.loc[data["Sub Category 2"].astype(str).str.strip() == "", "Sub Category 2"] = "General"
+    else:
+        levels = ["Sub Category 1"]
+
     data["Signed Qty"] = data["Quantity"] * data["Event Type"].map(SIGN_MAP).fillna(1)
 
     pivot = data.pivot_table(
         index=["Date", "To/From", "Description"],
-        columns=["Sub Category 1", "Sub Category 2"],
+        columns=levels,
         values="Signed Qty",
         aggfunc="sum",
     )
+    if not isinstance(pivot.columns, pd.MultiIndex):
+        pivot.columns = pd.MultiIndex.from_tuples([(c,) for c in pivot.columns])
     pivot = pivot.sort_index(level="Date")
 
     balance_src = data[data["Date"] <= as_of]
-    balance = balance_src.groupby(["Sub Category 1", "Sub Category 2"])["Signed Qty"].sum()
+    balance = balance_src.groupby(levels)["Signed Qty"].sum()
+    if not isinstance(balance.index, pd.MultiIndex):
+        balance.index = pd.MultiIndex.from_tuples([(i,) for i in balance.index])
 
-    sub1_order = list(dict.fromkeys(c[0] for c in pivot.columns))
-    sub2_by_sub1 = {c1: [] for c1 in sub1_order}
-    for c1, c2 in pivot.columns:
-        sub2_by_sub1[c1].append(c2)
-
-    return pivot, balance, sub1_order, sub2_by_sub1
+    columns = list(pivot.columns)
+    return pivot, balance, columns, len(levels)
 
 
-def stock_table_html(pivot, balance, sub1_order, sub2_by_sub1, as_of) -> str:
+def _build_header_rows(columns: list, level_count: int, row_h: int = 35) -> list:
+    """Returns a list of HTML strings, one per header row (excluding the
+    fixed Date/To-From/Description columns), each row's <th> cells
+    correctly colspan-grouped and pinned at the right sticky offset."""
+    rows = []
+    for level in range(level_count - 1):
+        cells, i, top = [], 0, level * row_h
+        while i < len(columns):
+            prefix = columns[i][: level + 1]
+            span = 1
+            while i + span < len(columns) and columns[i + span][: level + 1] == prefix:
+                span += 1
+            cells.append(f'<th colspan="{span}" style="top:{top}px;">{_esc(prefix[-1])}</th>')
+            i += span
+        rows.append("".join(cells))
+    top = (level_count - 1) * row_h
+    rows.append("".join(f'<th style="top:{top}px;">{_esc(c[-1])}</th>' for c in columns))
+    return rows
+
+
+def stock_table_html(pivot, balance, columns, level_count, as_of) -> str:
     css = """
 <style>
-.spk-wrap { max-height: 560px; overflow-y: auto; border: 1px solid rgba(128,128,128,.4); border-radius: 8px; }
+.spk-wrap { max-height: 480px; overflow-y: auto; border: 1px solid rgba(128,128,128,.4); border-radius: 8px; }
 table.spk-table { border-collapse: collapse; width: 100%; font-size: 13px; }
 table.spk-table th, table.spk-table td {
     border: 1px solid rgba(128,128,128,.35); padding: 6px 10px; text-align: center; white-space: nowrap;
 }
 table.spk-table thead th { position: sticky; background: #262730; color: #fafafa; z-index: 3; }
-table.spk-table thead tr:nth-child(1) th { top: 0; }
-table.spk-table thead tr:nth-child(2) th { top: 35px; }
 table.spk-table td:nth-child(-n+3), table.spk-table th:nth-child(-n+3) { text-align: left; }
 table.spk-table tfoot td { position: sticky; bottom: 0; background: #143d14; color: #fafafa; font-weight: 700; z-index: 3; }
 </style>
 """
+    header_rows = _build_header_rows(columns, level_count)
+
     thead = "<thead><tr>"
-    thead += '<th rowspan="2">Date</th><th rowspan="2">To/From</th><th rowspan="2">Description</th>'
-    for c1 in sub1_order:
-        thead += f'<th colspan="{len(sub2_by_sub1[c1])}">{_esc(c1)}</th>'
-    thead += "</tr><tr>"
-    for c1 in sub1_order:
-        for c2 in sub2_by_sub1[c1]:
-            thead += f"<th>{_esc(c2)}</th>"
-    thead += "</tr></thead>"
+    thead += (
+        f'<th rowspan="{level_count}" style="top:0;">Date</th>'
+        f'<th rowspan="{level_count}" style="top:0;">To/From</th>'
+        f'<th rowspan="{level_count}" style="top:0;">Description</th>'
+    )
+    thead += header_rows[0] + "</tr>"
+    for r in header_rows[1:]:
+        thead += f"<tr>{r}</tr>"
+    thead += "</thead>"
 
     tbody = "<tbody>"
     if pivot.empty:
-        colspan = 3 + sum(len(v) for v in sub2_by_sub1.values()) or 4
-        tbody += f'<tr><td colspan="{colspan}" style="text-align:center;">No records for this Main Category yet.</td></tr>'
+        tbody += f'<tr><td colspan="{3 + len(columns) or 4}" style="text-align:center;">No records for this Main Category yet.</td></tr>'
     else:
         for (d, tf, desc), row in pivot.iterrows():
             d_str = d.strftime("%Y-%m-%d") if pd.notna(d) else ""
             tbody += f"<tr><td>{_esc(d_str)}</td><td>{_esc(tf)}</td><td>{_esc(desc)}</td>"
-            for c1 in sub1_order:
-                for c2 in sub2_by_sub1[c1]:
-                    tbody += f"<td>{_fmt_num(row.get((c1, c2)))}</td>"
+            for col in columns:
+                tbody += f"<td>{_fmt_num(row.get(col))}</td>"
             tbody += "</tr>"
     tbody += "</tbody>"
 
     tfoot = f'<tfoot><tr><td colspan="3">Balance (as of {as_of.strftime("%Y-%m-%d")})</td>'
-    for c1 in sub1_order:
-        for c2 in sub2_by_sub1[c1]:
-            tfoot += f"<td>{_fmt_num(balance.get((c1, c2), 0))}</td>"
+    for col in columns:
+        tfoot += f"<td>{_fmt_num(balance.get(col, 0))}</td>"
     tfoot += "</tr></tfoot>"
 
     return f'{css}<div class="spk-wrap"><table class="spk-table">{thead}{tbody}{tfoot}</table></div>'
 
 
-def stock_table_export_df(pivot, balance, sub1_order, sub2_by_sub1, as_of) -> pd.DataFrame:
-    """Same rows/columns as the displayed table (including the Balance
-    row), flattened for a CSV download."""
-    flat_cols = [f"{c1} - {c2}" for c1 in sub1_order for c2 in sub2_by_sub1[c1]]
+def stock_table_export_df(pivot, balance, columns, level_count, as_of) -> pd.DataFrame:
+    def colname(col):
+        return " - ".join(col)
+
     rows = []
     for (d, tf, desc), row in pivot.iterrows():
         d_str = d.strftime("%Y-%m-%d") if pd.notna(d) else ""
         rec = {"Date": d_str, "To/From": tf, "Description": desc}
-        for c1 in sub1_order:
-            for c2 in sub2_by_sub1[c1]:
-                val = row.get((c1, c2))
-                rec[f"{c1} - {c2}"] = "" if pd.isna(val) else val
+        for col in columns:
+            val = row.get(col)
+            rec[colname(col)] = "" if pd.isna(val) else val
         rows.append(rec)
 
     balance_rec = {"Date": "", "To/From": "", "Description": f"Balance (as of {as_of.strftime('%Y-%m-%d')})"}
-    for c1 in sub1_order:
-        for c2 in sub2_by_sub1[c1]:
-            balance_rec[f"{c1} - {c2}"] = balance.get((c1, c2), 0)
+    for col in columns:
+        balance_rec[colname(col)] = balance.get(col, 0)
     rows.append(balance_rec)
 
-    return pd.DataFrame(rows, columns=["Date", "To/From", "Description"] + flat_cols)
+    return pd.DataFrame(rows, columns=["Date", "To/From", "Description"] + [colname(c) for c in columns])
+
+
+def render_office_table(data: pd.DataFrame, as_of: pd.Timestamp, heading: str, file_prefix: str, key_suffix: str):
+    st.markdown(f"#### {heading}")
+    pivot, balance, columns, level_count = compute_pivot_and_balance(data, as_of)
+    st.markdown(stock_table_html(pivot, balance, columns, level_count, as_of), unsafe_allow_html=True)
+    export_df = stock_table_export_df(pivot, balance, columns, level_count, as_of)
+    st.download_button(
+        "⬇️ Download this table as CSV",
+        export_df.to_csv(index=False).encode("utf-8"),
+        file_name=f"{file_prefix}_stock_table.csv",
+        mime="text/csv",
+        key=f"dl_{key_suffix}",
+    )
 
 
 # =========================================================
@@ -526,6 +605,7 @@ def stock_table_export_df(pivot, balance, sub1_order, sub2_by_sub1, as_of) -> pd
 ENTRY_KEYS = [
     "re_event_type", "re_date", "re_main_cat_choice", "re_main_cat_new",
     "re_sub1_choice", "re_sub1_new", "re_sub2_choice", "re_sub2_new",
+    "re_sub3_choice", "re_sub3_new",
     "re_qty", "re_uom_choice", "re_uom_new", "re_grn", "re_to_from", "re_desc",
 ]
 
@@ -533,6 +613,9 @@ ENTRY_KEYS = [
 def render_entry(df_office, user, office):
     st.title("📥 Record Entering")
     st.caption(f"New stock transaction — {office} office")
+
+    if st.session_state.pop("re_just_saved", False):
+        st.success(st.session_state.pop("re_saved_msg", "✅ Saved!"))
 
     c1, c2 = st.columns(2)
     with c1:
@@ -549,6 +632,12 @@ def render_entry(df_office, user, office):
         (df_office["Main Category"] == main_cat) & (df_office["Sub Category 1"] == sub1), "Sub Category 2"
     ].tolist() if sub1 else []
     sub2 = selectbox_with_add("Sub Category 2", sub2_options, "re_sub2", required=False)
+
+    sub3_options = df_office.loc[
+        (df_office["Main Category"] == main_cat) & (df_office["Sub Category 1"] == sub1)
+        & (df_office["Sub Category 2"] == sub2), "Sub Category 3"
+    ].tolist() if sub1 else []
+    sub3 = selectbox_with_add("Sub Category 3", sub3_options, "re_sub3", required=False)
 
     c3, c4 = st.columns(2)
     with c3:
@@ -567,12 +656,15 @@ def render_entry(df_office, user, office):
     )
     description = st.text_area("Description", height=80, key="re_desc")
 
-    if event_type == "Issue" and main_cat and sub1:
-        sign = df_office["Event Type"].map(SIGN_MAP).fillna(1)
-        mask = (df_office["Main Category"] == main_cat) & (df_office["Sub Category 1"] == sub1)
-        mask &= df_office["Sub Category 2"] == sub2 if sub2 else df_office["Sub Category 2"] == ""
-        current_balance = (df_office.loc[mask, "Quantity"] * sign[mask]).sum()
-        st.info(f"Current balance for **{sub1}{' / ' + sub2 if sub2 else ''}**: **{current_balance:g}**")
+    current_balance = None
+    if main_cat and sub1:
+        current_balance = compute_current_balance(df_office, main_cat, sub1, sub2, sub3)
+        if event_type == "Issue":
+            sub_label = sub1 + (f" / {sub2}" if sub2 else "") + (f" / {sub3}" if sub3 else "")
+            if current_balance is not None and current_balance <= 0:
+                st.warning(f"Current balance for **{sub_label}** is **{current_balance:g}** — nothing available to issue.")
+            else:
+                st.info(f"Current balance for **{sub_label}**: **{current_balance:g}**")
 
     st.write("")
     if st.button("💾 Save", type="primary", use_container_width=True):
@@ -583,6 +675,8 @@ def render_entry(df_office, user, office):
             errors.append("Sub Category 1")
         if not to_from.strip():
             errors.append("To/From")
+        if event_type == "Issue" and current_balance is not None and current_balance <= 0:
+            errors.append("Cannot issue - current stock for this item is 0")
         if errors:
             st.error("Please fix the following: " + ", ".join(errors))
             return
@@ -593,6 +687,7 @@ def render_entry(df_office, user, office):
             "Main Category": main_cat,
             "Sub Category 1": sub1,
             "Sub Category 2": sub2,
+            "Sub Category 3": sub3,
             "Quantity": quantity,
             "UOM": uom,
             "GRN NO": grn_no,
@@ -613,6 +708,7 @@ def render_entry(df_office, user, office):
                 "Main Category": main_cat,
                 "Sub Category 1": sub1,
                 "Sub Category 2": sub2,
+                "Sub Category 3": sub3,
                 "Quantity": quantity,
                 "UOM": uom,
                 "GRN NO": grn_no,
@@ -628,14 +724,15 @@ def render_entry(df_office, user, office):
         for k in ENTRY_KEYS:
             st.session_state.pop(k, None)
 
-        if transfer_created:
-            st.success(f"✅ Saved! {other_office(office)} has been notified to receive this transfer.")
-        else:
-            st.success("✅ Saved successfully!")
+        st.session_state["re_just_saved"] = True
+        st.session_state["re_saved_msg"] = (
+            f"✅ Saved! {other_office(office)} has been notified to receive this transfer."
+            if transfer_created else "✅ Saved!"
+        )
         st.rerun()
 
 
-def render_view(df_office, office):
+def render_view(df_office, office, df_all):
     st.title("📊 View Stock")
     st.caption(f"{office} office")
 
@@ -645,20 +742,19 @@ def render_view(df_office, office):
         return
 
     main_cat = st.selectbox("Main Category", main_cats)
-    data = df_office[df_office["Main Category"] == main_cat].copy()
-
     today = pd.Timestamp(date.today())
-    pivot, balance, sub1_order, sub2_by_sub1 = compute_pivot_and_balance(data, today)
+    other_off = other_office(office)
 
-    st.markdown(stock_table_html(pivot, balance, sub1_order, sub2_by_sub1, today), unsafe_allow_html=True)
+    own_data = df_office[df_office["Main Category"] == main_cat].copy()
+    render_office_table(own_data, today, f"🏢 {office} (Your Office)", office, "own")
 
-    export_df = stock_table_export_df(pivot, balance, sub1_order, sub2_by_sub1, today)
-    st.download_button(
-        "⬇️ Download this table as CSV",
-        export_df.to_csv(index=False).encode("utf-8"),
-        file_name=f"{office}_{main_cat}_stock_table.csv",
-        mime="text/csv",
-    )
+    st.divider()
+    other_data = df_all[(df_all["Office"] == other_off) & (df_all["Main Category"] == main_cat)].copy()
+    render_office_table(other_data, today, f"🔁 {other_off} Office", other_off, "other")
+
+    st.divider()
+    total_data = df_all[df_all["Main Category"] == main_cat].copy()
+    render_office_table(total_data, today, "🌐 Total Stock (Both Offices)", "total", "total")
 
 
 def render_edit(office):
@@ -671,16 +767,23 @@ def render_edit(office):
         st.info("No records yet for this office.")
         return
 
-    df_office = df_office.sort_values("Date", ascending=False)
+    available_dates = sorted({d for d in df_office["Date"].tolist() if d}, reverse=True)
+    if not available_dates:
+        st.info("No records yet for this office.")
+        return
+
+    selected_date = st.selectbox("1. Select Date", available_dates, key="edit_date")
+    day_records = df_office[df_office["Date"] == selected_date]
 
     def label_for(r):
-        sub = r["Sub Category 1"] + (f" / {r['Sub Category 2']}" if r["Sub Category 2"] else "")
-        return f"{r['Date']} · {r['Event Type']} · {r['Main Category']} / {sub} · Qty {r['Quantity']} · {r['To/From']}"
+        sub = r["Sub Category 1"] + (f" / {r['Sub Category 2']}" if r["Sub Category 2"] else "") \
+            + (f" / {r['Sub Category 3']}" if r.get("Sub Category 3") else "")
+        return f"{r['Event Type']} · {r['Main Category']} / {sub} · Qty {r['Quantity']} · {r['To/From']}"
 
-    labels = [label_for(r) for _, r in df_office.iterrows()]
-    rows_by_label = {label_for(r): r for _, r in df_office.iterrows()}
+    labels = [label_for(r) for _, r in day_records.iterrows()]
+    rows_by_label = {label_for(r): r for _, r in day_records.iterrows()}
 
-    selected_label = st.selectbox("Select a record to edit", labels, key="edit_select")
+    selected_label = st.selectbox("2. Select record", labels, key=f"edit_select_{selected_date}")
     rec = rows_by_label[selected_label]
 
     with st.form("edit_form"):
@@ -699,6 +802,7 @@ def render_edit(office):
         main_cat = st.text_input("Main Category", value=rec["Main Category"])
         sub1 = st.text_input("Sub Category 1", value=rec["Sub Category 1"])
         sub2 = st.text_input("Sub Category 2", value=rec["Sub Category 2"])
+        sub3 = st.text_input("Sub Category 3", value=rec.get("Sub Category 3", ""))
 
         c3, c4 = st.columns(2)
         with c3:
@@ -727,6 +831,7 @@ def render_edit(office):
             "Main Category": main_cat.strip(),
             "Sub Category 1": sub1.strip(),
             "Sub Category 2": sub2.strip(),
+            "Sub Category 3": sub3.strip(),
             "Quantity": quantity,
             "UOM": uom.strip(),
             "GRN NO": grn_no.strip(),
@@ -755,7 +860,8 @@ def render_notifications(office, user):
     else:
         for _, t in incoming.iterrows():
             with st.container(border=True):
-                sub = t["Sub Category 1"] + (f" / {t['Sub Category 2']}" if t["Sub Category 2"] else "")
+                sub = t["Sub Category 1"] + (f" / {t['Sub Category 2']}" if t["Sub Category 2"] else "") \
+                    + (f" / {t['Sub Category 3']}" if t.get("Sub Category 3") else "")
                 st.markdown(f"**From {t['From Office']}** — {t['Main Category']} / {sub}")
                 st.write(f"Quantity: **{t['Quantity']} {t['UOM']}**  ·  Date: {t['Date']}  ·  Issued by: {t['Issued By']}")
                 if t.get("Description"):
@@ -816,7 +922,7 @@ def main():
     if page.startswith("📥"):
         render_entry(df_office, user, office)
     elif page.startswith("📊"):
-        render_view(df_office, office)
+        render_view(df_office, office, df_all)
     elif page.startswith("✏️"):
         render_edit(office)
     else:
