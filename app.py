@@ -445,11 +445,16 @@ def _dependent_options(df: pd.DataFrame, column: str, filters: dict) -> list:
     return df.loc[mask, column].tolist() if applied else df[column].tolist()
 
 
-def selectbox_with_add(label: str, options: list, key: str, required: bool = True) -> str:
+def _reset_keys(keys: list) -> None:
+    for k in keys:
+        st.session_state.pop(k, None)
+
+
+def selectbox_with_add(label: str, options: list, key: str, required: bool = True, on_change=None) -> str:
     options = sorted({o for o in options if o})
     choice_list = [PLACEHOLDER] + options + [ADD_NEW]
     label_display = f"{label} *" if required else label
-    choice = st.selectbox(label_display, choice_list, key=f"{key}_choice")
+    choice = st.selectbox(label_display, choice_list, key=f"{key}_choice", on_change=on_change)
     if choice == ADD_NEW:
         return st.text_input(f"New {label}", key=f"{key}_new").strip()
     if choice == PLACEHOLDER:
@@ -637,15 +642,26 @@ def render_entry(df_office, user, office):
     with c2:
         entry_date = st.date_input("Date *", value=date.today(), key="re_date")
 
-    main_cat = selectbox_with_add("Main Category", df_office["Main Category"].tolist(), "re_main_cat")
+    main_cat = selectbox_with_add(
+        "Main Category", df_office["Main Category"].tolist(), "re_main_cat",
+        on_change=lambda: _reset_keys(
+            ["re_sub1_choice", "re_sub1_new", "re_sub2_choice", "re_sub2_new", "re_sub3_choice", "re_sub3_new"]
+        ),
+    )
 
     sub1_options = _dependent_options(df_office, "Sub Category 1", {"Main Category": main_cat})
-    sub1 = selectbox_with_add("Sub Category 1", sub1_options, "re_sub1")
+    sub1 = selectbox_with_add(
+        "Sub Category 1", sub1_options, "re_sub1",
+        on_change=lambda: _reset_keys(["re_sub2_choice", "re_sub2_new", "re_sub3_choice", "re_sub3_new"]),
+    )
 
     sub2_options = _dependent_options(
         df_office, "Sub Category 2", {"Main Category": main_cat, "Sub Category 1": sub1}
     )
-    sub2 = selectbox_with_add("Sub Category 2", sub2_options, "re_sub2", required=False)
+    sub2 = selectbox_with_add(
+        "Sub Category 2", sub2_options, "re_sub2", required=False,
+        on_change=lambda: _reset_keys(["re_sub3_choice", "re_sub3_new"]),
+    )
 
     sub3_options = _dependent_options(
         df_office, "Sub Category 3",
