@@ -629,7 +629,7 @@ ENTRY_KEYS = [
 ]
 
 
-def render_entry(df_office, user, office):
+def render_entry(df_office, df_all, user, office):
     st.title("📥 Record Entering")
     st.caption(f"New stock transaction — {office} office")
 
@@ -642,21 +642,23 @@ def render_entry(df_office, user, office):
     with c2:
         entry_date = st.date_input("Date *", value=date.today(), key="re_date")
 
+    # Category options are shared across both offices, so a category
+    # created by one office immediately shows up for the other.
     main_cat = selectbox_with_add(
-        "Main Category", df_office["Main Category"].tolist(), "re_main_cat",
+        "Main Category", df_all["Main Category"].tolist(), "re_main_cat",
         on_change=lambda: _reset_keys(
             ["re_sub1_choice", "re_sub1_new", "re_sub2_choice", "re_sub2_new", "re_sub3_choice", "re_sub3_new"]
         ),
     )
 
-    sub1_options = _dependent_options(df_office, "Sub Category 1", {"Main Category": main_cat})
+    sub1_options = _dependent_options(df_all, "Sub Category 1", {"Main Category": main_cat})
     sub1 = selectbox_with_add(
         "Sub Category 1", sub1_options, "re_sub1",
         on_change=lambda: _reset_keys(["re_sub2_choice", "re_sub2_new", "re_sub3_choice", "re_sub3_new"]),
     )
 
     sub2_options = _dependent_options(
-        df_office, "Sub Category 2", {"Main Category": main_cat, "Sub Category 1": sub1}
+        df_all, "Sub Category 2", {"Main Category": main_cat, "Sub Category 1": sub1}
     )
     sub2 = selectbox_with_add(
         "Sub Category 2", sub2_options, "re_sub2", required=False,
@@ -664,7 +666,7 @@ def render_entry(df_office, user, office):
     )
 
     sub3_options = _dependent_options(
-        df_office, "Sub Category 3",
+        df_all, "Sub Category 3",
         {"Main Category": main_cat, "Sub Category 1": sub1, "Sub Category 2": sub2},
     )
     sub3 = selectbox_with_add("Sub Category 3", sub3_options, "re_sub3", required=False)
@@ -675,9 +677,11 @@ def render_entry(df_office, user, office):
     with c4:
         uom = selectbox_with_add("UOM", df_office["UOM"].tolist(), "re_uom", required=False)
 
-    grn_no = ""
-    if event_type == "Receive":
-        grn_no = st.text_input("GRN NO", key="re_grn")
+    # GRN NO is available for any Event Type (not just Receive) and is
+    # optional — this matters most for Issue, since that's what carries
+    # over into the Transfer record and, later, the other office's
+    # auto-generated Receive entry.
+    grn_no = st.text_input("GRN NO (optional)", key="re_grn")
 
     to_from = st.text_input(
         "To / From *",
@@ -953,7 +957,7 @@ def main():
     df_office = df_all[df_all["Office"] == office].copy() if not df_all.empty else df_all
 
     if page.startswith("📥"):
-        render_entry(df_office, user, office)
+        render_entry(df_office, df_all, user, office)
     elif page.startswith("📊"):
         render_view(df_office, office, df_all)
     elif page.startswith("✏️"):
