@@ -34,6 +34,7 @@ SCOPES = [
 STOCK_SHEET = "Stock"
 USERS_SHEET = "Users"
 TRANSFERS_SHEET = "Transfers"
+VEHICLES_SHEET = "Vehicles"
 
 STOCK_HEADERS = [
     "Event Type", "Date", "Main Category", "Sub Category 1", "Sub Category 2", "Sub Category 3",
@@ -41,6 +42,7 @@ STOCK_HEADERS = [
     "Office", "Entered By", "Timestamp",
 ]
 USER_HEADERS = ["Office", "Name", "Username", "PasswordHash", "UpdatedAt"]
+VEHICLE_HEADERS = ["Sub Category 2", "Vehicles"]
 TRANSFER_HEADERS = [
     "TransferID", "From Office", "To Office", "Date", "Main Category",
     "Sub Category 1", "Sub Category 2", "Sub Category 3", "Quantity", "UOM", "GRN NO", "Description",
@@ -134,6 +136,24 @@ def _get_transfers_ws():
         ws.append_row(TRANSFER_HEADERS)
         return ws
     _migrate_add_column(ws, TRANSFER_HEADERS, "Sub Category 2", "Sub Category 3")
+    return ws
+
+
+@st.cache_resource(show_spinner=False)
+def _get_vehicles_ws():
+    """The 'Vehicles' tab is a lookup table (Sub Category 2 -> Vehicles)
+    that already lives in the same spreadsheet. Created empty with
+    headers if it doesn't exist yet, but never seeded with rows —
+    that mapping is maintained by hand."""
+    sh = _get_spreadsheet()
+    try:
+        ws = sh.worksheet(VEHICLES_SHEET)
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=VEHICLES_SHEET, rows=200, cols=len(VEHICLE_HEADERS) + 1)
+        ws.append_row(VEHICLE_HEADERS)
+        return ws
+    if not ws.row_values(1):
+        ws.append_row(VEHICLE_HEADERS)
     return ws
 
 
@@ -429,6 +449,25 @@ def pending_incoming_transfers(office: str) -> pd.DataFrame:
 
 
 # =========================================================
+# VEHICLES LOOKUP (Sub Category 2 -> Vehicles)
+# =========================================================
+@st.cache_data(ttl=30, show_spinner=False)
+def load_vehicle_map() -> dict:
+    """Reads the 'Vehicles' tab and returns {Sub Category 2: Vehicles}
+    so View Stock can show the matching vehicle for a Sub Category 2
+    without touching how the Stock sheet itself is structured."""
+    ws = _get_vehicles_ws()
+    records = ws.get_all_records()
+    mapping = {}
+    for rec in records:
+        sub2 = str(rec.get("Sub Category 2", "")).strip()
+        vehicle = str(rec.get("Vehicles", "")).strip()
+        if sub2:
+            mapping[sub2] = vehicle
+    return mapping
+
+
+# =========================================================
 # SHARED UI HELPERS
 # =========================================================
 def _dependent_options(df: pd.DataFrame, column: str, filters: dict) -> list:
@@ -517,27 +556,57 @@ def compute_pivot_and_balance(data: pd.DataFrame, as_of: pd.Timestamp):
     return pivot, balance, columns, len(levels)
 
 
-def _build_header_rows(columns: list, level_count: int, row_h: int = 35) -> list:
-    """Returns a list of HTML strings, one per header row (excluding the
-    fixed Date/To-From/Description columns), each row's <th> cells
-    correctly colspan-grouped and pinned at the right sticky offset."""
-    rows = []
-    for level in range(level_count - 1):
-        cells, i, top = [], 0, level * row_h
-        while i < len(columns):
-            prefix = columns[i][: level + 1]
-            span = 1
-            while i + span < len(columns) and columns[i + span][: level + 1] == prefix:
-                span += 1
-            cells.append(f'<th colspan="{span}" style="top:{top}px;">{_esc(prefix[-1])}</th>')
-            i += span
-        rows.append("".join(cells))
-    top = (level_count - 1) * row_h
-    rows.append("".join(f'<th style="top:{top}px;">{_esc(c[-1])}</th>' for c in columns))
-    return rows
+def _grouped_cells(columns: list, prefix_len: int, label_fn=None) -> list:
+    """Groups `columns` (tuples) by their first `prefix_len` elements
+    into consecutive (colspan, label) cells. `label_fn`, if given,
+    computes the displayed label from the group's prefix (defaults to
+    the prefix's last element)."""
+    label_fn = label_fn or (lambda prefix: prefix[-1] if prefix else "")
+    cells, i = [], 0
+    while i < len(columns):
+        prefix = columns[i][:prefix_len]
+        span = 1
+        while i + span < len(columns) and columns[i + span][:prefix_len] == prefix:
+            span += 1
+        cells.append((span, label_fn(prefix)))
+        i += span
+    return cells
 
 
-def stock_table_html(pivot, balance, columns, level_count, as_of) -> str:
+def _build_header_row_specs(columns: list, level_count: int, vehicle_map: dict = None) -> list:
+    """Builds the list of header rows (each a list of (colspan, label)
+    cells) for Sub Category 1 [2 [3]]. If `vehicle_map` has a match for
+    any Sub Category 2 value in play, an extra "Vehicles" row (looked
+    up by Sub Category 2) is inserted right after the Sub Category 2
+    row — i.e. as the row before Sub Category 3's row, or as the last
+    row when there's no Sub Category 3 level."""
+    row_specs = [_grouped_cells(columns, level + 1) for level in range(level_count - 1)]
+    row_specs.append(_grouped_cells(columns, level_count))  # deepest / detail row
+
+    if vehicle_map and level_count >= 2:
+        sub2_values = {c[1] for c in columns if len(c) > 1}
+        if sub2_values & vehicle_map.keys():
+            vehicle_row = _grouped_cells(
+                columns, 2, label_fn=lambda prefix: vehicle_map.get(prefix[-1], "")
+            )
+            row_specs.insert(1, vehicle_row)
+
+    return row_specs
+
+
+def _render_header_rows_html(row_specs: list, row_h: int = 35) -> list:
+    """Renders row specs to HTML <th> strings, one string per row, with
+    sticky `top` offsets computed from the final row order."""
+    html_rows = []
+    for r, cells in enumerate(row_specs):
+        top = r * row_h
+        html_rows.append(
+            "".join(f'<th colspan="{span}" style="top:{top}px;">{_esc(label)}</th>' for span, label in cells)
+        )
+    return html_rows
+
+
+def stock_table_html(pivot, balance, columns, level_count, as_of, vehicle_map: dict = None) -> str:
     css = """
 <style>
 .spk-wrap { max-height: 480px; overflow-y: auto; border: 1px solid rgba(128,128,128,.4); border-radius: 8px; }
@@ -550,13 +619,15 @@ table.spk-table td:nth-child(-n+3), table.spk-table th:nth-child(-n+3) { text-al
 table.spk-table tfoot td { position: sticky; bottom: 0; background: #143d14; color: #fafafa; font-weight: 700; z-index: 3; }
 </style>
 """
-    header_rows = _build_header_rows(columns, level_count)
+    row_specs = _build_header_row_specs(columns, level_count, vehicle_map)
+    header_rows = _render_header_rows_html(row_specs)
+    total_header_rows = len(row_specs)
 
     thead = "<thead><tr>"
     thead += (
-        f'<th rowspan="{level_count}" style="top:0;">Date</th>'
-        f'<th rowspan="{level_count}" style="top:0;">To/From</th>'
-        f'<th rowspan="{level_count}" style="top:0;">Description</th>'
+        f'<th rowspan="{total_header_rows}" style="top:0;">Date</th>'
+        f'<th rowspan="{total_header_rows}" style="top:0;">To/From</th>'
+        f'<th rowspan="{total_header_rows}" style="top:0;">Description</th>'
     )
     thead += header_rows[0] + "</tr>"
     for r in header_rows[1:]:
@@ -607,7 +678,8 @@ def stock_table_export_df(pivot, balance, columns, level_count, as_of) -> pd.Dat
 def render_office_table(data: pd.DataFrame, as_of: pd.Timestamp, heading: str, file_prefix: str, key_suffix: str):
     st.markdown(f"#### {heading}")
     pivot, balance, columns, level_count = compute_pivot_and_balance(data, as_of)
-    st.markdown(stock_table_html(pivot, balance, columns, level_count, as_of), unsafe_allow_html=True)
+    vehicle_map = load_vehicle_map()
+    st.markdown(stock_table_html(pivot, balance, columns, level_count, as_of, vehicle_map), unsafe_allow_html=True)
     export_df = stock_table_export_df(pivot, balance, columns, level_count, as_of)
     st.download_button(
         "⬇️ Download this table as CSV",
