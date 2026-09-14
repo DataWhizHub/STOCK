@@ -694,16 +694,18 @@ def render_office_table(data: pd.DataFrame, as_of: pd.Timestamp, heading: str, f
 # =========================================================
 # ISSUE SLIP (printable A5 form)
 # =========================================================
-def _deepest_sub_category(rec: dict) -> str:
-    """The 'Sub Category' column on the printed slip shows whichever
-    sub-category level was actually the last one filled in for that
-    record — Sub Category 3 if used, else Sub Category 2, else
-    Sub Category 1."""
-    for key in ("Sub Category 3", "Sub Category 2", "Sub Category 1"):
-        val = str(rec.get(key, "") or "").strip()
-        if val:
-            return val
-    return ""
+def _category_chain(rec: dict) -> str:
+    """The 'Category' column on the printed slip shows the full
+    category path for that record — Main Category, then whichever
+    Sub Category levels were filled in, joined like
+    'Filters-Air Filters-A 579-VIC'."""
+    parts = [
+        str(rec.get("Main Category", "") or "").strip(),
+        str(rec.get("Sub Category 1", "") or "").strip(),
+        str(rec.get("Sub Category 2", "") or "").strip(),
+        str(rec.get("Sub Category 3", "") or "").strip(),
+    ]
+    return "-".join(p for p in parts if p)
 
 
 def _common_or_blank(records: list, field: str) -> str:
@@ -717,24 +719,25 @@ def _common_or_blank(records: list, field: str) -> str:
 
 
 def build_issue_slip_html(records: list, office: str) -> str:
-    """Builds a self-contained, printable A5 HTML slip for one or more
-    Issue records. Date / Issued To/From / Code are filled in from the
-    saved record(s) when every record shares the same value, otherwise
-    left blank for manual entry. Checked-by / Received-by are always
-    left blank for manual signing."""
+    """Builds a self-contained, printable A5-landscape HTML slip for
+    one or more Issue records. Date / Issued To / Code / Issued by are
+    filled in from the saved record(s) when every record shares the
+    same value, otherwise left blank for manual entry. Checked-by /
+    Receiver fields are always left blank for manual signing."""
     if not records:
         return ""
 
     slip_date = _common_or_blank(records, "Date") or date.today().isoformat()
-    issued_to_from = _common_or_blank(records, "To/From")
+    issued_to = _common_or_blank(records, "To/From")
     code = _common_or_blank(records, "GRN NO")
+    issued_by = _common_or_blank(records, "Entered By")
 
     rows_html = ""
     for i, rec in enumerate(records, start=1):
         rows_html += (
             "<tr>"
             f"<td>{_esc(i)}</td>"
-            f"<td>{_esc(_deepest_sub_category(rec))}</td>"
+            f"<td>{_esc(_category_chain(rec))}</td>"
             f"<td>{_esc(rec.get('Description', ''))}</td>"
             f"<td>{_esc(rec.get('UOM', ''))}</td>"
             f"<td>{_fmt_num(rec.get('Quantity', 0))}</td>"
@@ -747,22 +750,22 @@ def build_issue_slip_html(records: list, office: str) -> str:
 <head>
 <meta charset="utf-8">
 <style>
-  @page {{ size: A5; margin: 10mm; }}
-  body {{ font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #000; margin: 0; padding: 10px; background:#fff; }}
-  h1 {{ font-size: 15px; text-align: center; margin: 0 0 10px 0; }}
-  .meta {{ width: 100%; border-collapse: collapse; margin-bottom: 10px; }}
-  .meta td {{ padding: 3px 4px; font-size: 12px; }}
+  @page {{ size: A5 landscape; margin: 8mm; }}
+  body {{ font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #000; margin: 0; padding: 12px; background:#fff; }}
+  h1 {{ font-size: 17px; text-align: center; margin: 0 0 10px 0; letter-spacing: .3px; }}
+  .meta {{ width: 100%; border-collapse: collapse; margin-bottom: 12px; }}
+  .meta td {{ padding: 5px 8px; font-size: 13px; }}
   .meta .label {{ font-weight: bold; white-space: nowrap; }}
   .meta .line {{ border-bottom: 1px solid #000; }}
-  table.items {{ width: 100%; border-collapse: collapse; margin-bottom: 16px; }}
-  table.items th, table.items td {{ border: 1px solid #000; padding: 4px 6px; font-size: 11px; text-align: center; }}
+  table.items {{ width: 100%; border-collapse: collapse; margin-bottom: 22px; }}
+  table.items th, table.items td {{ border: 1px solid #000; padding: 7px 8px; font-size: 13px; text-align: center; }}
   table.items th {{ background: #eee; }}
-  .sign-table {{ width: 100%; border-collapse: collapse; margin-top: 30px; }}
-  .sign-table td {{ padding: 6px 4px; font-size: 12px; vertical-align: bottom; }}
-  .sign-line {{ border-bottom: 1px solid #000; display: inline-block; min-width: 120px; }}
+  .sign-table {{ width: 100%; border-collapse: collapse; margin-top: 26px; }}
+  .sign-table td {{ padding: 10px 6px; font-size: 13px; vertical-align: bottom; }}
+  .sign-line {{ border-bottom: 1px solid #000; display: inline-block; min-width: 140px; }}
   .print-btn {{ margin: 10px 0; text-align: center; }}
   .print-btn button {{ font-size: 13px; padding: 6px 14px; cursor: pointer; }}
-  @media print {{ .print-btn {{ display: none; }} }}
+  @media print {{ .print-btn {{ display: none; }} body {{ padding: 6mm; }} }}
 </style>
 </head>
 <body>
@@ -770,18 +773,18 @@ def build_issue_slip_html(records: list, office: str) -> str:
   <h1>KMN - Vehicle Parts Stock Maintaining System</h1>
   <table class="meta">
     <tr>
-      <td class="label">Office:</td><td class="line">{_esc(office)}</td>
+      <td class="label">Issued From:</td><td class="line">{_esc(office)}</td>
       <td class="label">Date:</td><td class="line">{_esc(slip_date)}</td>
     </tr>
     <tr>
-      <td class="label">Issued To/From:</td><td class="line">{_esc(issued_to_from)}</td>
+      <td class="label">Issued To:</td><td class="line">{_esc(issued_to)}</td>
       <td class="label">Code:</td><td class="line">{_esc(code)}</td>
     </tr>
   </table>
   <table class="items">
     <thead>
       <tr>
-        <th>Item No</th><th>Sub Category</th><th>Description</th><th>UOM</th><th>Quantity</th><th>Remark</th>
+        <th>Item No</th><th>Category</th><th>Description</th><th>UOM</th><th>Quantity</th><th>Remark</th>
       </tr>
     </thead>
     <tbody>
@@ -790,17 +793,19 @@ def build_issue_slip_html(records: list, office: str) -> str:
   </table>
   <table class="sign-table">
     <tr>
+      <td colspan="3">Issued by: <span class="sign-line">{_esc(issued_by)}</span></td>
+    </tr>
+    <tr><td colspan="3">&nbsp;</td></tr>
+    <tr>
       <td>Checked by: <span class="sign-line">&nbsp;</span></td>
       <td>Date: <span class="sign-line">&nbsp;</span></td>
-    </tr>
-    <tr><td colspan="2">&nbsp;</td></tr>
-    <tr>
-      <td>Received by: <span class="sign-line">&nbsp;</span></td>
-      <td>Name: <span class="sign-line">&nbsp;</span></td>
-    </tr>
-    <tr>
-      <td>Date: <span class="sign-line">&nbsp;</span></td>
       <td>&nbsp;</td>
+    </tr>
+    <tr><td colspan="3">&nbsp;</td></tr>
+    <tr>
+      <td>Receiver Name: <span class="sign-line">&nbsp;</span></td>
+      <td>Signature: <span class="sign-line">&nbsp;</span></td>
+      <td>Date: <span class="sign-line">&nbsp;</span></td>
     </tr>
   </table>
 </body>
@@ -943,11 +948,6 @@ def render_entry(df_office, df_all, user, office):
         }
         append_stock_entry(saved_record)
 
-        if event_type == "Issue":
-            st.session_state["re_last_issue_record"] = saved_record
-        else:
-            st.session_state.pop("re_last_issue_record", None)
-
         transfer_created = False
         if event_type == "Issue" and to_from.strip().lower() == other_office(office).lower():
             create_transfer({
@@ -981,43 +981,62 @@ def render_entry(df_office, df_all, user, office):
         )
         st.rerun()
 
-    # Bottom notification (mirrors the one shown at the top of the page)
-    # plus a printable A5 issue slip for the record just saved, if any.
+    # Bottom notification (mirrors the one shown at the top of the page).
     if st.session_state.get("re_just_saved", False):
         st.divider()
         st.success(st.session_state.get("re_saved_msg", "✅ Saved!"))
-        last_issue = st.session_state.get("re_last_issue_record")
-        if last_issue:
-            with st.expander("🖨️ Print issue slip for this record", expanded=False):
-                render_issue_slip_widget([last_issue], office, key_suffix="single")
         st.session_state.pop("re_just_saved", None)
         st.session_state.pop("re_saved_msg", None)
 
-    st.divider()
-    with st.expander("🖨️ Print All Issued Items (by Date)", expanded=False):
-        df_issue_office = df_office[df_office["Event Type"] == "Issue"].copy()
-        issue_dates = sorted(
-            {d.date().isoformat() for d in df_issue_office["Date"].dropna()}, reverse=True
-        )
-        if not issue_dates:
-            st.caption("No issued items recorded yet for this office.")
-        else:
-            picked_date = st.selectbox("Select date", issue_dates, key="slip_pick_date")
-            if st.button("Generate slip for this date", key="slip_gen_btn"):
-                day_df = df_issue_office[
-                    df_issue_office["Date"].dt.date.astype(str) == picked_date
-                ].copy()
-                day_df["Date"] = day_df["Date"].dt.strftime("%Y-%m-%d")
-                st.session_state["slip_all_records"] = day_df.to_dict("records")
-                st.session_state["slip_all_date"] = picked_date
 
-            if (
-                st.session_state.get("slip_all_records")
-                and st.session_state.get("slip_all_date") == picked_date
-            ):
-                render_issue_slip_widget(
-                    st.session_state["slip_all_records"], office, key_suffix=f"date_{picked_date}"
-                )
+def render_slips(df_office, office):
+    st.title("🖨️ Slips")
+    st.caption(f"Generate a printable A5 (landscape) issue slip — {office} office")
+
+    df_issue = df_office[df_office["Event Type"] == "Issue"].copy()
+    if df_issue.empty:
+        st.info("No issued items recorded yet for this office.")
+        return
+
+    df_issue = df_issue.sort_values("Date", ascending=False)
+
+    records_by_label = {}
+    labels = []
+    for _, r in df_issue.iterrows():
+        d_str = r["Date"].strftime("%Y-%m-%d") if pd.notna(r["Date"]) else ""
+        base_label = (
+            f"{d_str} · {_category_chain(r)} · Qty {_fmt_num(r['Quantity'])} {r['UOM']} · To {r['To/From']}"
+        )
+        label = base_label
+        n = 1
+        while label in records_by_label:
+            n += 1
+            label = f"{base_label} ({n})"
+        records_by_label[label] = r.to_dict()
+        labels.append(label)
+
+    st.caption("All issued records for this office — select one or more, then generate the slip.")
+    selected_labels = st.multiselect("Issued records", labels, key="slips_selected")
+
+    if st.button(
+        "🧾 Generate Slip", type="primary", use_container_width=True, disabled=not selected_labels
+    ):
+        selected_records = []
+        for label in selected_labels:
+            rec = dict(records_by_label[label])
+            if isinstance(rec.get("Date"), pd.Timestamp):
+                rec["Date"] = rec["Date"].strftime("%Y-%m-%d")
+            selected_records.append(rec)
+        st.session_state["slips_generated_records"] = selected_records
+        st.session_state["slips_generated_key"] = uuid.uuid4().hex[:8]
+
+    if st.session_state.get("slips_generated_records"):
+        st.divider()
+        render_issue_slip_widget(
+            st.session_state["slips_generated_records"],
+            office,
+            key_suffix=st.session_state.get("slips_generated_key", "gen"),
+        )
 
 
 def render_view(df_office, office, df_all):
@@ -1197,7 +1216,7 @@ def main():
     st.sidebar.divider()
     page = st.sidebar.radio(
         "Menu",
-        ["📥 Record Entering", "📊 View Stock", "✏️ Edit Records", notif_label],
+        ["📥 Record Entering", "📊 View Stock", "✏️ Edit Records", "🖨️ Slips", notif_label],
         label_visibility="collapsed",
     )
     st.sidebar.divider()
@@ -1213,6 +1232,8 @@ def main():
         render_view(df_office, office, df_all)
     elif page.startswith("✏️"):
         render_edit(office)
+    elif page.startswith("🖨️"):
+        render_slips(df_office, office)
     else:
         render_notifications(office, user)
 
