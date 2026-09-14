@@ -720,7 +720,7 @@ def _common_or_blank(records: list, field: str) -> str:
 
 def build_issue_slip_html(records: list, office: str) -> str:
     """Builds a self-contained, printable A5-landscape HTML slip for
-    one or more Issue records. Date / Issued To / Code / Issued by are
+    one or more Issue records. Date / Issued To / SN / Issued by are
     filled in from the saved record(s) when every record shares the
     same value, otherwise left blank for manual entry. Checked-by /
     Receiver fields are always left blank for manual signing."""
@@ -749,20 +749,25 @@ def build_issue_slip_html(records: list, office: str) -> str:
 <html>
 <head>
 <meta charset="utf-8">
+<title>KMN Vehicle Parts Stock - Issue Slip</title>
 <style>
   @page {{ size: A5 landscape; margin: 8mm; }}
-  body {{ font-family: Arial, Helvetica, sans-serif; font-size: 13px; color: #000; margin: 0; padding: 12px; background:#fff; }}
-  h1 {{ font-size: 17px; text-align: center; margin: 0 0 10px 0; letter-spacing: .3px; }}
+  body {{ font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #000; margin: 0; padding: 12px; background:#fff; }}
+  h1 {{ font-size: 18px; text-align: center; margin: 0 0 10px 0; letter-spacing: .3px; }}
   .meta {{ width: 100%; border-collapse: collapse; margin-bottom: 12px; }}
-  .meta td {{ padding: 5px 8px; font-size: 13px; }}
-  .meta .label {{ font-weight: bold; white-space: nowrap; }}
-  .meta .line {{ border-bottom: 1px solid #000; }}
-  table.items {{ width: 100%; border-collapse: collapse; margin-bottom: 22px; }}
-  table.items th, table.items td {{ border: 1px solid #000; padding: 7px 8px; font-size: 13px; text-align: center; }}
+  .meta td {{ padding: 4px 8px; font-size: 14px; white-space: nowrap; }}
+  .meta .label {{ font-weight: bold; }}
+  .meta .value {{ font-weight: normal; margin-left: 4px; }}
+  table.items {{ width: 100%; border-collapse: collapse; margin-bottom: 22px; table-layout: auto; }}
+  table.items th, table.items td {{ border: 1px solid #000; padding: 8px 10px; font-size: 14px; text-align: center; }}
   table.items th {{ background: #eee; }}
+  table.items col.col-itemno {{ width: 5%; }}
+  table.items col.col-uom {{ width: 7%; }}
+  table.items col.col-qty {{ width: 8%; }}
+  table.items col.col-remark {{ width: 24%; }}
   .sign-table {{ width: 100%; border-collapse: collapse; margin-top: 26px; }}
-  .sign-table td {{ padding: 10px 6px; font-size: 13px; vertical-align: bottom; }}
-  .sign-line {{ border-bottom: 1px solid #000; display: inline-block; min-width: 140px; }}
+  .sign-table td {{ padding: 10px 6px; font-size: 14px; vertical-align: bottom; width: 50%; }}
+  .sign-line {{ border-bottom: 1px solid #000; display: inline-block; min-width: 160px; }}
   .print-btn {{ margin: 10px 0; text-align: center; }}
   .print-btn button {{ font-size: 13px; padding: 6px 14px; cursor: pointer; }}
   @media print {{ .print-btn {{ display: none; }} body {{ padding: 6mm; }} }}
@@ -773,15 +778,23 @@ def build_issue_slip_html(records: list, office: str) -> str:
   <h1>KMN - Vehicle Parts Stock Maintaining System</h1>
   <table class="meta">
     <tr>
-      <td class="label">Issued From:</td><td class="line">{_esc(office)}</td>
-      <td class="label">Date:</td><td class="line">{_esc(slip_date)}</td>
+      <td class="label">Issued From:<span class="value">{_esc(office)}</span></td>
+      <td class="label">Date:<span class="value">{_esc(slip_date)}</span></td>
     </tr>
     <tr>
-      <td class="label">Issued To:</td><td class="line">{_esc(issued_to)}</td>
-      <td class="label">Code:</td><td class="line">{_esc(code)}</td>
+      <td class="label">Issued To:<span class="value">{_esc(issued_to)}</span></td>
+      <td class="label">SN:<span class="value">{_esc(code)}</span></td>
     </tr>
   </table>
   <table class="items">
+    <colgroup>
+      <col class="col-itemno">
+      <col>
+      <col>
+      <col class="col-uom">
+      <col class="col-qty">
+      <col class="col-remark">
+    </colgroup>
     <thead>
       <tr>
         <th>Item No</th><th>Category</th><th>Description</th><th>UOM</th><th>Quantity</th><th>Remark</th>
@@ -793,18 +806,17 @@ def build_issue_slip_html(records: list, office: str) -> str:
   </table>
   <table class="sign-table">
     <tr>
-      <td colspan="3">Issued by: <span class="sign-line">{_esc(issued_by)}</span></td>
+      <td>Issued by: <span class="sign-line">{_esc(issued_by)}</span></td>
+      <td>Receiver Name: <span class="sign-line">&nbsp;</span></td>
     </tr>
-    <tr><td colspan="3">&nbsp;</td></tr>
+    <tr><td>&nbsp;</td><td>&nbsp;</td></tr>
     <tr>
       <td>Checked by: <span class="sign-line">&nbsp;</span></td>
-      <td>Date: <span class="sign-line">&nbsp;</span></td>
-      <td>&nbsp;</td>
-    </tr>
-    <tr><td colspan="3">&nbsp;</td></tr>
-    <tr>
-      <td>Receiver Name: <span class="sign-line">&nbsp;</span></td>
       <td>Signature: <span class="sign-line">&nbsp;</span></td>
+    </tr>
+    <tr><td>&nbsp;</td><td>&nbsp;</td></tr>
+    <tr>
+      <td>Date: <span class="sign-line">&nbsp;</span></td>
       <td>Date: <span class="sign-line">&nbsp;</span></td>
     </tr>
   </table>
