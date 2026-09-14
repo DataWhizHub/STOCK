@@ -749,6 +749,7 @@ def build_issue_slip_html(records: list, office: str) -> str:
 <html>
 <head>
 <meta charset="utf-8">
+<title>KMN Vehicle Parts Stock - Issue Slip</title>
 <style>
   @page {{ size: A5 landscape; margin: 8mm; }}
   body {{ font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #000; margin: 0; padding: 12px; background:#fff; }}
