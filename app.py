@@ -20,6 +20,7 @@ import bcrypt
 import gspread
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 from google.oauth2.service_account import Credentials
 
 st.set_page_config(page_title="Vehicle Parts Stock - KMN", page_icon="🔧", layout="wide")
@@ -691,6 +692,140 @@ def render_office_table(data: pd.DataFrame, as_of: pd.Timestamp, heading: str, f
 
 
 # =========================================================
+# ISSUE SLIP (printable A5 form)
+# =========================================================
+def _deepest_sub_category(rec: dict) -> str:
+    """The 'Sub Category' column on the printed slip shows whichever
+    sub-category level was actually the last one filled in for that
+    record — Sub Category 3 if used, else Sub Category 2, else
+    Sub Category 1."""
+    for key in ("Sub Category 3", "Sub Category 2", "Sub Category 1"):
+        val = str(rec.get(key, "") or "").strip()
+        if val:
+            return val
+    return ""
+
+
+def _common_or_blank(records: list, field: str) -> str:
+    """Returns the shared value of `field` across all records, or ""
+    if the records disagree (left blank on the slip for manual fill)."""
+    values = {str(r.get(field, "") or "").strip() for r in records}
+    values.discard("")
+    if len(values) == 1:
+        return values.pop()
+    return ""
+
+
+def build_issue_slip_html(records: list, office: str) -> str:
+    """Builds a self-contained, printable A5 HTML slip for one or more
+    Issue records. Date / Issued To/From / Code are filled in from the
+    saved record(s) when every record shares the same value, otherwise
+    left blank for manual entry. Checked-by / Received-by are always
+    left blank for manual signing."""
+    if not records:
+        return ""
+
+    slip_date = _common_or_blank(records, "Date") or date.today().isoformat()
+    issued_to_from = _common_or_blank(records, "To/From")
+    code = _common_or_blank(records, "GRN NO")
+
+    rows_html = ""
+    for i, rec in enumerate(records, start=1):
+        rows_html += (
+            "<tr>"
+            f"<td>{_esc(i)}</td>"
+            f"<td>{_esc(_deepest_sub_category(rec))}</td>"
+            f"<td>{_esc(rec.get('Description', ''))}</td>"
+            f"<td>{_esc(rec.get('UOM', ''))}</td>"
+            f"<td>{_fmt_num(rec.get('Quantity', 0))}</td>"
+            f"<td>&nbsp;</td>"
+            "</tr>"
+        )
+
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  @page {{ size: A5; margin: 10mm; }}
+  body {{ font-family: Arial, Helvetica, sans-serif; font-size: 12px; color: #000; margin: 0; padding: 10px; background:#fff; }}
+  h1 {{ font-size: 15px; text-align: center; margin: 0 0 10px 0; }}
+  .meta {{ width: 100%; border-collapse: collapse; margin-bottom: 10px; }}
+  .meta td {{ padding: 3px 4px; font-size: 12px; }}
+  .meta .label {{ font-weight: bold; white-space: nowrap; }}
+  .meta .line {{ border-bottom: 1px solid #000; }}
+  table.items {{ width: 100%; border-collapse: collapse; margin-bottom: 16px; }}
+  table.items th, table.items td {{ border: 1px solid #000; padding: 4px 6px; font-size: 11px; text-align: center; }}
+  table.items th {{ background: #eee; }}
+  .sign-table {{ width: 100%; border-collapse: collapse; margin-top: 30px; }}
+  .sign-table td {{ padding: 6px 4px; font-size: 12px; vertical-align: bottom; }}
+  .sign-line {{ border-bottom: 1px solid #000; display: inline-block; min-width: 120px; }}
+  .print-btn {{ margin: 10px 0; text-align: center; }}
+  .print-btn button {{ font-size: 13px; padding: 6px 14px; cursor: pointer; }}
+  @media print {{ .print-btn {{ display: none; }} }}
+</style>
+</head>
+<body>
+  <div class="print-btn"><button onclick="window.print()">🖨️ Print / Save as PDF</button></div>
+  <h1>KMN - Vehicle Parts Stock Maintaining System</h1>
+  <table class="meta">
+    <tr>
+      <td class="label">Office:</td><td class="line">{_esc(office)}</td>
+      <td class="label">Date:</td><td class="line">{_esc(slip_date)}</td>
+    </tr>
+    <tr>
+      <td class="label">Issued To/From:</td><td class="line">{_esc(issued_to_from)}</td>
+      <td class="label">Code:</td><td class="line">{_esc(code)}</td>
+    </tr>
+  </table>
+  <table class="items">
+    <thead>
+      <tr>
+        <th>Item No</th><th>Sub Category</th><th>Description</th><th>UOM</th><th>Quantity</th><th>Remark</th>
+      </tr>
+    </thead>
+    <tbody>
+      {rows_html}
+    </tbody>
+  </table>
+  <table class="sign-table">
+    <tr>
+      <td>Checked by: <span class="sign-line">&nbsp;</span></td>
+      <td>Date: <span class="sign-line">&nbsp;</span></td>
+    </tr>
+    <tr><td colspan="2">&nbsp;</td></tr>
+    <tr>
+      <td>Received by: <span class="sign-line">&nbsp;</span></td>
+      <td>Name: <span class="sign-line">&nbsp;</span></td>
+    </tr>
+    <tr>
+      <td>Date: <span class="sign-line">&nbsp;</span></td>
+      <td>&nbsp;</td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
+def render_issue_slip_widget(records: list, office: str, key_suffix: str):
+    """Shows an inline preview (with its own Print button) plus a
+    download button, so the slip can also be opened in a full browser
+    tab and printed / saved as PDF from there."""
+    html_doc = build_issue_slip_html(records, office)
+    if not html_doc:
+        st.caption("Nothing to print.")
+        return
+    components.html(html_doc, height=480, scrolling=True)
+    st.download_button(
+        "⬇️ Download printable slip (HTML)",
+        html_doc.encode("utf-8"),
+        file_name=f"issue_slip_{office}_{key_suffix}.html",
+        mime="text/html",
+        key=f"dl_slip_{key_suffix}",
+    )
+
+
+# =========================================================
 # PAGES
 # =========================================================
 ENTRY_KEYS = [
@@ -705,8 +840,8 @@ def render_entry(df_office, df_all, user, office):
     st.title("📥 Record Entering")
     st.caption(f"New stock transaction — {office} office")
 
-    if st.session_state.pop("re_just_saved", False):
-        st.success(st.session_state.pop("re_saved_msg", "✅ Saved!"))
+    if st.session_state.get("re_just_saved", False):
+        st.success(st.session_state.get("re_saved_msg", "✅ Saved!"))
 
     c1, c2 = st.columns(2)
     with c1:
@@ -790,7 +925,7 @@ def render_entry(df_office, df_all, user, office):
             st.error("Please fix the following: " + ", ".join(errors))
             return
 
-        append_stock_entry({
+        saved_record = {
             "Event Type": event_type,
             "Date": entry_date.isoformat(),
             "Main Category": main_cat,
@@ -805,7 +940,13 @@ def render_entry(df_office, df_all, user, office):
             "Office": office,
             "Entered By": user["name"],
             "Timestamp": datetime.now().isoformat(timespec="seconds"),
-        })
+        }
+        append_stock_entry(saved_record)
+
+        if event_type == "Issue":
+            st.session_state["re_last_issue_record"] = saved_record
+        else:
+            st.session_state.pop("re_last_issue_record", None)
 
         transfer_created = False
         if event_type == "Issue" and to_from.strip().lower() == other_office(office).lower():
@@ -839,6 +980,44 @@ def render_entry(df_office, df_all, user, office):
             if transfer_created else "✅ Saved!"
         )
         st.rerun()
+
+    # Bottom notification (mirrors the one shown at the top of the page)
+    # plus a printable A5 issue slip for the record just saved, if any.
+    if st.session_state.get("re_just_saved", False):
+        st.divider()
+        st.success(st.session_state.get("re_saved_msg", "✅ Saved!"))
+        last_issue = st.session_state.get("re_last_issue_record")
+        if last_issue:
+            with st.expander("🖨️ Print issue slip for this record", expanded=False):
+                render_issue_slip_widget([last_issue], office, key_suffix="single")
+        st.session_state.pop("re_just_saved", None)
+        st.session_state.pop("re_saved_msg", None)
+
+    st.divider()
+    with st.expander("🖨️ Print All Issued Items (by Date)", expanded=False):
+        df_issue_office = df_office[df_office["Event Type"] == "Issue"].copy()
+        issue_dates = sorted(
+            {d.date().isoformat() for d in df_issue_office["Date"].dropna()}, reverse=True
+        )
+        if not issue_dates:
+            st.caption("No issued items recorded yet for this office.")
+        else:
+            picked_date = st.selectbox("Select date", issue_dates, key="slip_pick_date")
+            if st.button("Generate slip for this date", key="slip_gen_btn"):
+                day_df = df_issue_office[
+                    df_issue_office["Date"].dt.date.astype(str) == picked_date
+                ].copy()
+                day_df["Date"] = day_df["Date"].dt.strftime("%Y-%m-%d")
+                st.session_state["slip_all_records"] = day_df.to_dict("records")
+                st.session_state["slip_all_date"] = picked_date
+
+            if (
+                st.session_state.get("slip_all_records")
+                and st.session_state.get("slip_all_date") == picked_date
+            ):
+                render_issue_slip_widget(
+                    st.session_state["slip_all_records"], office, key_suffix=f"date_{picked_date}"
+                )
 
 
 def render_view(df_office, office, df_all):
