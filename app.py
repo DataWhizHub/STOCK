@@ -749,7 +749,6 @@ def build_issue_slip_html(records: list, office: str) -> str:
 <html>
 <head>
 <meta charset="utf-8">
-<title>KMN Vehicle Parts Stock - Issue Slip</title>
 <style>
   @page {{ size: A5 landscape; margin: 8mm; }}
   body {{ font-family: Arial, Helvetica, sans-serif; font-size: 14px; color: #000; margin: 0; padding: 12px; background:#fff; }}
@@ -766,7 +765,7 @@ def build_issue_slip_html(records: list, office: str) -> str:
   table.items col.col-qty {{ width: 8%; }}
   table.items col.col-remark {{ width: 24%; }}
   .sign-table {{ width: 100%; border-collapse: collapse; margin-top: 26px; }}
-  .sign-table td {{ padding: 10px 6px; font-size: 14px; vertical-align: bottom; width: 50%; }}
+  .sign-table td {{ border: 1px solid #000; padding: 10px 10px; font-size: 14px; vertical-align: bottom; width: 50%; }}
   .sign-line {{ border-bottom: 1px solid #000; display: inline-block; min-width: 160px; }}
   .print-btn {{ margin: 10px 0; text-align: center; }}
   .print-btn button {{ font-size: 13px; padding: 6px 14px; cursor: pointer; }}
@@ -809,12 +808,10 @@ def build_issue_slip_html(records: list, office: str) -> str:
       <td>Issued by: <span class="sign-line">{_esc(issued_by)}</span></td>
       <td>Receiver Name: <span class="sign-line">&nbsp;</span></td>
     </tr>
-    <tr><td>&nbsp;</td><td>&nbsp;</td></tr>
     <tr>
       <td>Checked by: <span class="sign-line">&nbsp;</span></td>
       <td>Signature: <span class="sign-line">&nbsp;</span></td>
     </tr>
-    <tr><td>&nbsp;</td><td>&nbsp;</td></tr>
     <tr>
       <td>Date: <span class="sign-line">&nbsp;</span></td>
       <td>Date: <span class="sign-line">&nbsp;</span></td>
