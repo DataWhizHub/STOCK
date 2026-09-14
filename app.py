@@ -39,11 +39,11 @@ VEHICLES_SHEET = "Vehicles"
 
 STOCK_HEADERS = [
     "Event Type", "Date", "Main Category", "Sub Category 1", "Sub Category 2", "Sub Category 3",
-    "Quantity", "UOM", "GRN NO", "To/From", "Description",
+    "Quantity", "UOM", "GRN NO", "Unit Cost", "To/From", "Description",
     "Office", "Entered By", "Timestamp",
 ]
 USER_HEADERS = ["Office", "Name", "Username", "PasswordHash", "UpdatedAt"]
-VEHICLE_HEADERS = ["Sub Category 2", "Vehicles"]
+VEHICLE_HEADERS = ["Sub Category 2", "Vehicles", "Min Level"]
 TRANSFER_HEADERS = [
     "TransferID", "From Office", "To Office", "Date", "Main Category",
     "Sub Category 1", "Sub Category 2", "Sub Category 3", "Quantity", "UOM", "GRN NO", "Description",
@@ -56,7 +56,7 @@ OFFICE_SEED = [
     {"Office": "Palavi", "Name": "Mr. Sampath"},
 ]
 
-SIGN_MAP = {"Issue": -1, "Receive": 1, "Add": 1}
+SIGN_MAP = {"Issue": -1, "Receive": 1, "Add": 1, "Purchase": 1}
 ADD_NEW = "➕ Add new..."
 PLACEHOLDER = "-- Select --"
 
@@ -107,6 +107,7 @@ def _get_stock_ws():
         ws.append_row(STOCK_HEADERS)
         return ws
     _migrate_add_column(ws, STOCK_HEADERS, "Sub Category 2", "Sub Category 3")
+    _migrate_add_column(ws, STOCK_HEADERS, "GRN NO", "Unit Cost")
     return ws
 
 
@@ -155,6 +156,7 @@ def _get_vehicles_ws():
         return ws
     if not ws.row_values(1):
         ws.append_row(VEHICLE_HEADERS)
+    _migrate_add_column(ws, VEHICLE_HEADERS, "Vehicles", "Min Level")
     return ws
 
 
@@ -189,6 +191,7 @@ def load_stock() -> pd.DataFrame:
             df[col] = ""
 
     df["Quantity"] = pd.to_numeric(df["Quantity"], errors="coerce").fillna(0.0)
+    df["Unit Cost"] = pd.to_numeric(df["Unit Cost"], errors="coerce").fillna(0.0)
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     text_cols = ["Sub Category 1", "Sub Category 2", "Sub Category 3", "UOM", "To/From", "Description",
                  "Main Category", "GRN NO", "Office", "Entered By", "Event Type"]
@@ -465,6 +468,25 @@ def load_vehicle_map() -> dict:
         vehicle = str(rec.get("Vehicles", "")).strip()
         if sub2:
             mapping[sub2] = vehicle
+    return mapping
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def load_min_levels() -> dict:
+    """Reads the 'Vehicles' tab and returns {Sub Category 2: Min Level}
+    (as a float) for whichever rows have a Min Level filled in — used
+    by the Filters Summary to work out reorder amounts."""
+    ws = _get_vehicles_ws()
+    records = ws.get_all_records()
+    mapping = {}
+    for rec in records:
+        sub2 = str(rec.get("Sub Category 2", "")).strip()
+        raw = str(rec.get("Min Level", "")).strip()
+        if sub2 and raw:
+            try:
+                mapping[sub2] = float(raw)
+            except ValueError:
+                pass
     return mapping
 
 
@@ -847,7 +869,7 @@ ENTRY_KEYS = [
     "re_event_type", "re_date", "re_main_cat_choice", "re_main_cat_new",
     "re_sub1_choice", "re_sub1_new", "re_sub2_choice", "re_sub2_new",
     "re_sub3_choice", "re_sub3_new",
-    "re_qty", "re_uom_choice", "re_uom_new", "re_grn", "re_to_from", "re_desc",
+    "re_qty", "re_uom_choice", "re_uom_new", "re_grn", "re_unit_cost", "re_to_from", "re_desc",
 ]
 
 
@@ -860,7 +882,7 @@ def render_entry(df_office, df_all, user, office):
 
     c1, c2 = st.columns(2)
     with c1:
-        event_type = st.selectbox("Event Type *", ["Issue", "Receive", "Add"], key="re_event_type")
+        event_type = st.selectbox("Event Type *", ["Issue", "Receive", "Add", "Purchase"], key="re_event_type")
     with c2:
         entry_date = st.date_input("Date *", value=date.today(), key="re_date")
 
@@ -899,6 +921,13 @@ def render_entry(df_office, df_all, user, office):
     with c4:
         uom = selectbox_with_add("UOM", df_office["UOM"].tolist(), "re_uom", required=False)
 
+    # Cost of Unit only applies to a Purchase entry.
+    unit_cost = None
+    if event_type == "Purchase":
+        unit_cost = st.number_input(
+            "Cost of Unit *", min_value=0.0, step=0.01, format="%.2f", key="re_unit_cost"
+        )
+
     # GRN NO is available for any Event Type (not just Receive) and is
     # optional — this matters most for Issue, since that's what carries
     # over into the Transfer record and, later, the other office's
@@ -936,6 +965,8 @@ def render_entry(df_office, df_all, user, office):
                 errors.append("Cannot issue - current stock for this item is 0")
             elif quantity > current_balance:
                 errors.append(f"Cannot issue {quantity:g} - only {current_balance:g} in stock for this item")
+        if event_type == "Purchase" and (not unit_cost or unit_cost <= 0):
+            errors.append("Cost of Unit")
         if errors:
             st.error("Please fix the following: " + ", ".join(errors))
             return
@@ -950,6 +981,7 @@ def render_entry(df_office, df_all, user, office):
             "Quantity": quantity,
             "UOM": uom,
             "GRN NO": grn_no,
+            "Unit Cost": unit_cost if event_type == "Purchase" else "",
             "To/From": to_from.strip(),
             "Description": description.strip(),
             "Office": office,
@@ -1049,6 +1081,57 @@ def render_slips(df_office, office):
         )
 
 
+def render_filters_summary(df_all):
+    st.title("📦 Filters Summary")
+    st.caption("Stock levels across both offices for the Filters category, with reorder amounts")
+
+    df_filters = df_all[df_all["Main Category"] == "Filters"].copy()
+    if df_filters.empty:
+        st.info("No records yet for the Filters category.")
+        return
+
+    df_filters["Signed Qty"] = df_filters["Quantity"] * df_filters["Event Type"].map(SIGN_MAP).fillna(1)
+
+    grouped = (
+        df_filters.groupby(["Sub Category 1", "Sub Category 2", "Office"])["Signed Qty"]
+        .sum()
+        .unstack("Office", fill_value=0.0)
+    )
+    for off in OFFICES:
+        if off not in grouped.columns:
+            grouped[off] = 0.0
+    grouped["Total Stock"] = grouped[OFFICES].sum(axis=1)
+    grouped = grouped.reset_index()
+
+    min_levels = load_min_levels()
+
+    def order_amount(row):
+        min_level = min_levels.get(row["Sub Category 2"])
+        if min_level is None:
+            return ""
+        shortfall = min_level - row["Total Stock"]
+        return _fmt_num(shortfall) if shortfall > 0 else ""
+
+    grouped["Order"] = grouped.apply(order_amount, axis=1)
+
+    display_df = grouped.rename(columns={"Chilaw": "Chilaw Stock", "Palavi": "Palavi Stock"})
+    display_df = display_df[
+        ["Sub Category 1", "Sub Category 2", "Chilaw Stock", "Palavi Stock", "Total Stock", "Order"]
+    ]
+    for col in ["Chilaw Stock", "Palavi Stock", "Total Stock"]:
+        display_df[col] = display_df[col].map(_fmt_num)
+
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "⬇️ Download Filters Summary as CSV",
+        display_df.to_csv(index=False).encode("utf-8"),
+        file_name="filters_summary.csv",
+        mime="text/csv",
+        key="dl_filters_summary",
+    )
+
+
 def render_view(df_office, office, df_all):
     st.title("📊 View Stock")
     st.caption(f"{office} office")
@@ -1106,7 +1189,7 @@ def render_edit(office):
     with st.form("edit_form"):
         c1, c2 = st.columns(2)
         with c1:
-            options = ["Issue", "Receive", "Add"]
+            options = ["Issue", "Receive", "Add", "Purchase"]
             idx = options.index(rec["Event Type"]) if rec["Event Type"] in options else 0
             event_type = st.selectbox("Event Type", options, index=idx)
         with c2:
@@ -1132,6 +1215,13 @@ def render_edit(office):
             uom = st.text_input("UOM", value=rec["UOM"])
 
         grn_no = st.text_input("GRN NO", value=rec["GRN NO"])
+        try:
+            default_cost = float(rec.get("Unit Cost") or 0)
+        except (ValueError, TypeError):
+            default_cost = 0.0
+        unit_cost = st.number_input(
+            "Cost of Unit (for Purchase)", min_value=0.0, step=0.01, format="%.2f", value=default_cost
+        )
         to_from = st.text_input("To/From", value=rec["To/From"])
         description = st.text_area("Description", value=rec["Description"])
 
@@ -1152,6 +1242,7 @@ def render_edit(office):
             "Quantity": quantity,
             "UOM": uom.strip(),
             "GRN NO": grn_no.strip(),
+            "Unit Cost": unit_cost if event_type == "Purchase" else "",
             "To/From": to_from.strip(),
             "Description": description.strip(),
             "Office": office,
@@ -1226,7 +1317,7 @@ def main():
     st.sidebar.divider()
     page = st.sidebar.radio(
         "Menu",
-        ["📥 Record Entering", "📊 View Stock", "✏️ Edit Records", "🖨️ Slips", notif_label],
+        ["📥 Record Entering", "📊 View Stock", "✏️ Edit Records", "🖨️ Slips", "📦 Filters Summary", notif_label],
         label_visibility="collapsed",
     )
     st.sidebar.divider()
@@ -1244,6 +1335,8 @@ def main():
         render_edit(office)
     elif page.startswith("🖨️"):
         render_slips(df_office, office)
+    elif page.startswith("📦"):
+        render_filters_summary(df_all)
     else:
         render_notifications(office, user)
 
