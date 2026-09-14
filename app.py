@@ -1104,6 +1104,7 @@ def render_filters_summary(df_all):
     grouped = grouped.reset_index()
 
     min_levels = load_min_levels()
+    vehicle_map = load_vehicle_map()
 
     def order_amount(row):
         min_level = min_levels.get(row["Sub Category 2"])
@@ -1113,10 +1114,11 @@ def render_filters_summary(df_all):
         return _fmt_num(shortfall) if shortfall > 0 else ""
 
     grouped["Order"] = grouped.apply(order_amount, axis=1)
+    grouped["Vehicles"] = grouped["Sub Category 2"].map(vehicle_map).fillna("")
 
     display_df = grouped.rename(columns={"Chilaw": "Chilaw Stock", "Palavi": "Palavi Stock"})
     display_df = display_df[
-        ["Sub Category 1", "Sub Category 2", "Chilaw Stock", "Palavi Stock", "Total Stock", "Order"]
+        ["Sub Category 1", "Vehicles", "Sub Category 2", "Chilaw Stock", "Palavi Stock", "Total Stock", "Order"]
     ]
     for col in ["Chilaw Stock", "Palavi Stock", "Total Stock"]:
         display_df[col] = display_df[col].map(_fmt_num)
