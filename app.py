@@ -550,9 +550,13 @@ def _custom_column_sort_key_for_category(main_cat: str):
         return float(m.group(1)) if m else float("inf")
 
     if name == "sand paper":
-        # Sort purely by the leading grit number, ascending — regardless
-        # of the color that follows it (40, 60, 100, 180, 240, ...).
-        return lambda label: (leading_num(label), str(label).lower())
+        # Items with no grit number (e.g. "Water Mart") come first,
+        # then the numbered grits ascending (40, 60, 100, 180, 240...)
+        # regardless of the color that follows the number.
+        def sand_key(label):
+            has_num = re.search(r"(\d+)", str(label)) is not None
+            return (1 if has_num else 0, leading_num(label), str(label).lower())
+        return sand_key
 
     if name == "tape & tube":
         # All "Tube" items first, then all "Tape" items, each group
