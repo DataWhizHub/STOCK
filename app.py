@@ -539,13 +539,14 @@ def _fmt_num(v) -> str:
 # ---------- generic 1/2/3-level stock pivot ----------
 def _custom_column_sort_key_for_category(main_cat: str):
     """Some Main Categories have a natural display order that doesn't
-    match plain alphabetical sorting. Returns a key function for the
-    Sub Category 1 label used as each View Stock column, or None if no
-    special ordering applies for this Main Category."""
-    name = (main_cat or "").strip().lower()
+    match plain alphabetical sorting. Returns a key function for a
+    View Stock column's full label (its Sub Category levels joined
+    together), or None if no special ordering applies for this Main
+    Category."""
+    name = re.sub(r"\s+", " ", (main_cat or "").strip().lower())
 
     def leading_num(label) -> float:
-        m = re.match(r"\s*(\d+)", str(label))
+        m = re.search(r"(\d+)", str(label))
         return float(m.group(1)) if m else float("inf")
 
     if name == "sand paper":
@@ -607,15 +608,18 @@ def compute_pivot_and_balance(data: pd.DataFrame, as_of: pd.Timestamp, main_cat:
     columns = list(pivot.columns)
 
     # A handful of categories have a natural (non-alphabetical) display
-    # order — only applied for single-level categories, which is what
-    # these known cases use.
-    if len(levels) == 1:
-        sort_key = _custom_column_sort_key_for_category(main_cat)
-        if sort_key is not None:
-            columns = sorted(columns, key=lambda c: sort_key(c[0]))
-            ordered_index = pd.MultiIndex.from_tuples(columns)
-            pivot = pivot.reindex(columns=ordered_index)
-            balance = balance.reindex(ordered_index).fillna(0.0)
+    # order. Sorting on the full joined label (all Sub Category levels
+    # together) means this works whether the category stores its items
+    # as a single Sub Category 1 value or split across Sub1/Sub2 — and
+    # since matching tuples' shared prefix always sorts to the same
+    # key, same-prefix columns stay adjacent (so the grouped header
+    # cells still line up correctly).
+    sort_key = _custom_column_sort_key_for_category(main_cat)
+    if sort_key is not None:
+        columns = sorted(columns, key=lambda c: sort_key(" ".join(str(x) for x in c)))
+        ordered_index = pd.MultiIndex.from_tuples(columns)
+        pivot = pivot.reindex(columns=ordered_index)
+        balance = balance.reindex(ordered_index).fillna(0.0)
 
     return pivot, balance, columns, len(levels)
 
