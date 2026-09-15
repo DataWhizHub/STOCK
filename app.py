@@ -13,6 +13,7 @@ Google Sheet worksheets used:
 """
 
 import html as html_lib
+import re
 import uuid
 from datetime import date, datetime
 
@@ -536,7 +537,35 @@ def _fmt_num(v) -> str:
 
 
 # ---------- generic 1/2/3-level stock pivot ----------
-def compute_pivot_and_balance(data: pd.DataFrame, as_of: pd.Timestamp):
+def _custom_column_sort_key_for_category(main_cat: str):
+    """Some Main Categories have a natural display order that doesn't
+    match plain alphabetical sorting. Returns a key function for the
+    Sub Category 1 label used as each View Stock column, or None if no
+    special ordering applies for this Main Category."""
+    name = (main_cat or "").strip().lower()
+
+    def leading_num(label) -> float:
+        m = re.match(r"\s*(\d+)", str(label))
+        return float(m.group(1)) if m else float("inf")
+
+    if name == "sand paper":
+        # Sort purely by the leading grit number, ascending — regardless
+        # of the color that follows it (40, 60, 100, 180, 240, ...).
+        return lambda label: (leading_num(label), str(label).lower())
+
+    if name == "tape & tube":
+        # All "Tube" items first, then all "Tape" items, each group
+        # ordered by its leading size number.
+        def key(label):
+            label_l = str(label).lower()
+            group = 0 if "tube" in label_l else (1 if "tape" in label_l else 2)
+            return (group, leading_num(label), label_l)
+        return key
+
+    return None
+
+
+def compute_pivot_and_balance(data: pd.DataFrame, as_of: pd.Timestamp, main_cat: str = ""):
     """
     Builds a pivot with as many sub-category levels as this Main
     Category actually uses: just Sub Category 1 if that's all anyone
@@ -576,6 +605,18 @@ def compute_pivot_and_balance(data: pd.DataFrame, as_of: pd.Timestamp):
         balance.index = pd.MultiIndex.from_tuples([(i,) for i in balance.index])
 
     columns = list(pivot.columns)
+
+    # A handful of categories have a natural (non-alphabetical) display
+    # order — only applied for single-level categories, which is what
+    # these known cases use.
+    if len(levels) == 1:
+        sort_key = _custom_column_sort_key_for_category(main_cat)
+        if sort_key is not None:
+            columns = sorted(columns, key=lambda c: sort_key(c[0]))
+            ordered_index = pd.MultiIndex.from_tuples(columns)
+            pivot = pivot.reindex(columns=ordered_index)
+            balance = balance.reindex(ordered_index).fillna(0.0)
+
     return pivot, balance, columns, len(levels)
 
 
@@ -698,9 +739,11 @@ def stock_table_export_df(pivot, balance, columns, level_count, as_of) -> pd.Dat
     return pd.DataFrame(rows, columns=["Date", "To/From", "Description"] + [colname(c) for c in columns])
 
 
-def render_office_table(data: pd.DataFrame, as_of: pd.Timestamp, heading: str, file_prefix: str, key_suffix: str):
+def render_office_table(
+    data: pd.DataFrame, as_of: pd.Timestamp, heading: str, file_prefix: str, key_suffix: str, main_cat: str = ""
+):
     st.markdown(f"#### {heading}")
-    pivot, balance, columns, level_count = compute_pivot_and_balance(data, as_of)
+    pivot, balance, columns, level_count = compute_pivot_and_balance(data, as_of, main_cat)
     vehicle_map = load_vehicle_map()
     st.markdown(stock_table_html(pivot, balance, columns, level_count, as_of, vehicle_map), unsafe_allow_html=True)
     export_df = stock_table_export_df(pivot, balance, columns, level_count, as_of)
@@ -1148,15 +1191,15 @@ def render_view(df_office, office, df_all):
     other_off = other_office(office)
 
     own_data = df_office[df_office["Main Category"] == main_cat].copy()
-    render_office_table(own_data, today, f"🏢 {office} (Your Office)", office, "own")
+    render_office_table(own_data, today, f"🏢 {office} (Your Office)", office, "own", main_cat)
 
     st.divider()
     other_data = df_all[(df_all["Office"] == other_off) & (df_all["Main Category"] == main_cat)].copy()
-    render_office_table(other_data, today, f"🔁 {other_off} Office", other_off, "other")
+    render_office_table(other_data, today, f"🔁 {other_off} Office", other_off, "other", main_cat)
 
     st.divider()
     total_data = df_all[df_all["Main Category"] == main_cat].copy()
-    render_office_table(total_data, today, "🌐 Total Stock (Both Offices)", "total", "total")
+    render_office_table(total_data, today, "🌐 Total Stock (Both Offices)", "total", "total", main_cat)
 
 
 def render_edit(office):
