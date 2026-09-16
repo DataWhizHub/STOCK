@@ -1185,6 +1185,54 @@ def render_filters_summary(df_all):
     )
 
 
+def render_selected_item_summary(df_all):
+    st.title("🔎 Selected Item Summary")
+    st.caption("Pick a Main Category to see stock levels across both offices")
+
+    main_cats = sorted({m for m in df_all["Main Category"].tolist() if m})
+    if not main_cats:
+        st.info("No records yet.")
+        return
+
+    main_cat = st.selectbox("Main Category", main_cats, key="sis_main_cat")
+
+    df_cat = df_all[df_all["Main Category"] == main_cat].copy()
+    if df_cat.empty:
+        st.info("No records yet for this Main Category.")
+        return
+
+    df_cat["Signed Qty"] = df_cat["Quantity"] * df_cat["Event Type"].map(SIGN_MAP).fillna(1)
+
+    grouped = (
+        df_cat.groupby(["Sub Category 1", "Sub Category 2", "Sub Category 3", "Office"])["Signed Qty"]
+        .sum()
+        .unstack("Office", fill_value=0.0)
+    )
+    for off in OFFICES:
+        if off not in grouped.columns:
+            grouped[off] = 0.0
+    grouped["Total Stock"] = grouped[OFFICES].sum(axis=1)
+    grouped = grouped.reset_index()
+
+    display_df = grouped.rename(columns={"Chilaw": "Chilaw Stock", "Palavi": "Palavi Stock"})
+    display_df = display_df[
+        ["Sub Category 1", "Sub Category 2", "Sub Category 3", "Chilaw Stock", "Palavi Stock", "Total Stock"]
+    ]
+    display_df = display_df.sort_values(["Sub Category 1", "Sub Category 2", "Sub Category 3"]).reset_index(drop=True)
+    for col in ["Chilaw Stock", "Palavi Stock", "Total Stock"]:
+        display_df[col] = display_df[col].map(_fmt_num)
+
+    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+    st.download_button(
+        "⬇️ Download Selected Item Summary as CSV",
+        display_df.to_csv(index=False).encode("utf-8"),
+        file_name=f"{main_cat.replace(' ', '_').lower()}_item_summary.csv",
+        mime="text/csv",
+        key="dl_selected_item_summary",
+    )
+
+
 def render_view(df_office, office, df_all):
     st.title("📊 View Stock")
     st.caption(f"{office} office")
@@ -1370,7 +1418,8 @@ def main():
     st.sidebar.divider()
     page = st.sidebar.radio(
         "Menu",
-        ["📥 Record Entering", "📊 View Stock", "✏️ Edit Records", "🖨️ Slips", "📦 Filters Summary", notif_label],
+        ["📥 Record Entering", "📊 View Stock", "✏️ Edit Records", "🖨️ Slips", "📦 Filters Summary",
+         "🔎 Selected Item Summary", notif_label],
         label_visibility="collapsed",
     )
     st.sidebar.divider()
@@ -1390,6 +1439,8 @@ def main():
         render_slips(df_office, office)
     elif page.startswith("📦"):
         render_filters_summary(df_all)
+    elif page.startswith("🔎"):
+        render_selected_item_summary(df_all)
     else:
         render_notifications(office, user)
 
