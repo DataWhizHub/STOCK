@@ -1186,7 +1186,7 @@ def render_filters_summary(df_all):
 
 
 SUMMARY_COLUMNS = [
-    "Sub Category 1", "Sub Category 2", "Sub Category 3",
+    "Sub Category 1", "Vehicles", "Sub Category 2", "Sub Category 3",
     "Chilaw Stock", "Palavi Stock", "Total Stock",
 ]
 
@@ -1209,6 +1209,9 @@ def _selected_item_summary_table(df_all, main_cat: str):
             grouped[off] = 0.0
     grouped["Total Stock"] = grouped[OFFICES].sum(axis=1)
     grouped = grouped.reset_index()
+
+    vehicle_map = load_vehicle_map()
+    grouped["Vehicles"] = grouped["Sub Category 2"].map(vehicle_map).fillna("")
 
     display_df = grouped.rename(columns={"Chilaw": "Chilaw Stock", "Palavi": "Palavi Stock"})
     display_df = display_df[SUMMARY_COLUMNS]
