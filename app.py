@@ -1185,21 +1185,17 @@ def render_filters_summary(df_all):
     )
 
 
-def render_selected_item_summary(df_all):
-    st.title("🔎 Selected Item Summary")
-    st.caption("Pick a Main Category to see stock levels across both offices")
+SUMMARY_COLUMNS = [
+    "Sub Category 1", "Sub Category 2", "Sub Category 3",
+    "Chilaw Stock", "Palavi Stock", "Total Stock",
+]
 
-    main_cats = sorted({m for m in df_all["Main Category"].tolist() if m})
-    if not main_cats:
-        st.info("No records yet.")
-        return
 
-    main_cat = st.selectbox("Main Category", main_cats, key="sis_main_cat")
-
+def _selected_item_summary_table(df_all, main_cat: str):
+    """Stock table (both offices) for a single Main Category."""
     df_cat = df_all[df_all["Main Category"] == main_cat].copy()
     if df_cat.empty:
-        st.info("No records yet for this Main Category.")
-        return
+        return pd.DataFrame(columns=SUMMARY_COLUMNS)
 
     df_cat["Signed Qty"] = df_cat["Quantity"] * df_cat["Event Type"].map(SIGN_MAP).fillna(1)
 
@@ -1215,19 +1211,61 @@ def render_selected_item_summary(df_all):
     grouped = grouped.reset_index()
 
     display_df = grouped.rename(columns={"Chilaw": "Chilaw Stock", "Palavi": "Palavi Stock"})
-    display_df = display_df[
-        ["Sub Category 1", "Sub Category 2", "Sub Category 3", "Chilaw Stock", "Palavi Stock", "Total Stock"]
-    ]
+    display_df = display_df[SUMMARY_COLUMNS]
     display_df = display_df.sort_values(["Sub Category 1", "Sub Category 2", "Sub Category 3"]).reset_index(drop=True)
     for col in ["Chilaw Stock", "Palavi Stock", "Total Stock"]:
         display_df[col] = display_df[col].map(_fmt_num)
+    return display_df
 
-    st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+def render_selected_item_summary(df_all):
+    import csv
+    import io
+
+    st.title("🔎 Selected Item Summary")
+    st.caption("Pick one or more Main Categories to see stock levels across both offices")
+
+    main_cats = sorted({m for m in df_all["Main Category"].tolist() if m})
+    if not main_cats:
+        st.info("No records yet.")
+        return
+
+    selected = st.multiselect("Main Categories", main_cats, key="sis_main_cats")
+    if not selected:
+        st.info("Select one or more Main Categories to see their summary.")
+        return
+
+    # One heading + table per selected Main Category.
+    tables = {}
+    for main_cat in selected:
+        table = _selected_item_summary_table(df_all, main_cat)
+        tables[main_cat] = table
+        st.markdown(f"#### {main_cat}")
+        if table.empty:
+            st.info("No records yet for this Main Category.")
+        else:
+            st.dataframe(table, use_container_width=True, hide_index=True)
+
+    # Download: every selected Main Category as its own block in one CSV
+    # ("Main Category, <name>" row, then that category's table, then a blank row).
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    for i, (main_cat, table) in enumerate(tables.items()):
+        if i > 0:
+            writer.writerow([])
+        writer.writerow(["Main Category", main_cat])
+        writer.writerow(list(table.columns))
+        writer.writerows(table.values.tolist())
+
+    if len(selected) == 1:
+        file_name = f"{selected[0].replace(' ', '_').lower()}_item_summary.csv"
+    else:
+        file_name = "selected_items_summary.csv"
 
     st.download_button(
         "⬇️ Download Selected Item Summary as CSV",
-        display_df.to_csv(index=False).encode("utf-8"),
-        file_name=f"{main_cat.replace(' ', '_').lower()}_item_summary.csv",
+        buf.getvalue().encode("utf-8"),
+        file_name=file_name,
         mime="text/csv",
         key="dl_selected_item_summary",
     )
