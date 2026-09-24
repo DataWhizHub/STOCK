@@ -1186,7 +1186,7 @@ def render_filters_summary(df_all):
 
 
 SUMMARY_COLUMNS = [
-    "Sub Category 1", "Vehicles", "Sub Category 2", "Sub Category 3",
+    "Sub Category 1", "Sub Category 2", "Sub Category 3",
     "Chilaw Stock", "Palavi Stock", "Total Stock",
 ]
 
@@ -1210,11 +1210,15 @@ def _selected_item_summary_table(df_all, main_cat: str):
     grouped["Total Stock"] = grouped[OFFICES].sum(axis=1)
     grouped = grouped.reset_index()
 
-    vehicle_map = load_vehicle_map()
-    grouped["Vehicles"] = grouped["Sub Category 2"].map(vehicle_map).fillna("")
+    columns = list(SUMMARY_COLUMNS)
+    # The Vehicles column (looked up by Sub Category 2) is only shown for
+    # the Filters Main Category, as the 2nd column.
+    if main_cat.strip().lower() == "filters":
+        grouped["Vehicles"] = grouped["Sub Category 2"].map(load_vehicle_map()).fillna("")
+        columns.insert(1, "Vehicles")
 
     display_df = grouped.rename(columns={"Chilaw": "Chilaw Stock", "Palavi": "Palavi Stock"})
-    display_df = display_df[SUMMARY_COLUMNS]
+    display_df = display_df[columns]
     display_df = display_df.sort_values(["Sub Category 1", "Sub Category 2", "Sub Category 3"]).reset_index(drop=True)
     for col in ["Chilaw Stock", "Palavi Stock", "Total Stock"]:
         display_df[col] = display_df[col].map(_fmt_num)
