@@ -1275,6 +1275,38 @@ def render_selected_item_summary(df_all):
     )
 
 
+def render_purchase_details(df_office, office):
+    st.title("💰 Purchase Details")
+    st.caption(f"Purchase records — {office} office")
+
+    df_purchase = df_office[df_office["Event Type"] == "Purchase"].copy() if not df_office.empty else df_office
+    if df_purchase.empty:
+        st.info("No purchase records yet for this office.")
+        return
+
+    main_cats = sorted({m for m in df_purchase["Main Category"].tolist() if m})
+    if not main_cats:
+        st.info("No purchase records yet for this office.")
+        return
+
+    main_cat = st.selectbox("Main Category", main_cats, key="pd_main_cat")
+
+    data = df_purchase[df_purchase["Main Category"] == main_cat].copy()
+    data = data.sort_values("Date", ascending=False)
+
+    table = pd.DataFrame({
+        "Date": data["Date"].apply(lambda d: d.strftime("%Y-%m-%d") if pd.notna(d) else ""),
+        "Sub Category 1": data["Sub Category 1"],
+        "Sub Category 2": data["Sub Category 2"],
+        "Sub Category 3": data["Sub Category 3"],
+        "To / From": data["To/From"],
+        "Cost of Unit": data["Unit Cost"].map(lambda v: f"{float(v):,.2f}"),
+        "Description": data["Description"],
+    }).reset_index(drop=True)
+
+    st.dataframe(table, use_container_width=True, hide_index=True)
+
+
 def render_view(df_office, office, df_all):
     st.title("📊 View Stock")
     st.caption(f"{office} office")
@@ -1461,7 +1493,7 @@ def main():
     page = st.sidebar.radio(
         "Menu",
         ["📥 Record Entering", "📊 View Stock", "✏️ Edit Records", "🖨️ Slips", "📦 Filters Summary",
-         "🔎 Selected Item Summary", notif_label],
+         "🔎 Selected Item Summary", "💰 Purchase Details", notif_label],
         label_visibility="collapsed",
     )
     st.sidebar.divider()
@@ -1483,6 +1515,8 @@ def main():
         render_filters_summary(df_all)
     elif page.startswith("🔎"):
         render_selected_item_summary(df_all)
+    elif page.startswith("💰"):
+        render_purchase_details(df_office, office)
     else:
         render_notifications(office, user)
 
