@@ -575,8 +575,8 @@ def compute_pivot_and_balance(data: pd.DataFrame, as_of: pd.Timestamp, main_cat:
     Builds a pivot with as many sub-category levels as this Main
     Category actually uses: just Sub Category 1 if that's all anyone
     ever filled in for it, Sub1+Sub2 if Sub2 is sometimes used, or
-    Sub1+Sub2+Sub3 if Sub3 is ever used (missing Sub2/Sub3 on a given
-    row falls back to "General" so the table still lines up).
+    Sub1+Sub2+Sub3 if Sub3 is ever used (a missing Sub2/Sub3 on a
+    given row is simply left as an empty cell in the header).
     """
     data = data.copy()
     sub2_used = data["Sub Category 2"].astype(str).str.strip().ne("").any()
@@ -584,11 +584,8 @@ def compute_pivot_and_balance(data: pd.DataFrame, as_of: pd.Timestamp, main_cat:
 
     if sub3_used:
         levels = ["Sub Category 1", "Sub Category 2", "Sub Category 3"]
-        data.loc[data["Sub Category 2"].astype(str).str.strip() == "", "Sub Category 2"] = "General"
-        data.loc[data["Sub Category 3"].astype(str).str.strip() == "", "Sub Category 3"] = "General"
     elif sub2_used:
         levels = ["Sub Category 1", "Sub Category 2"]
-        data.loc[data["Sub Category 2"].astype(str).str.strip() == "", "Sub Category 2"] = "General"
     else:
         levels = ["Sub Category 1"]
 
