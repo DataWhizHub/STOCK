@@ -982,20 +982,14 @@ def render_entry(df_office, df_all, user, office):
     # auto-generated Receive entry.
     grn_no = st.text_input("GRN NO (optional)", key="re_grn")
 
-    # One field: pick the other office (inter-office transfer) or a
-    # previously used To/From value from the list, or just type anything
-    # new straight into the same box. Typed values are saved with the
-    # record, so they show up in this list next time.
-    previous_to_from = sorted(
-        {v for v in df_office["To/From"].tolist() if v and v != office and v != other_office(office)}
-    )
-    to_from_options = [other_office(office)] + previous_to_from
+    # One field: pick the other office (inter-office transfer) from the
+    # list, or just type anything else straight into the same box.
     to_from = st.selectbox(
         "To / From *",
-        to_from_options,
+        [other_office(office)],
         index=None,
         accept_new_options=True,
-        placeholder=f"Select '{other_office(office)}', pick a previous one, or type a new one",
+        placeholder=f"Select '{other_office(office)}' or type a location",
         key="re_to_from_choice",
     )
     to_from = (to_from or "").strip()
