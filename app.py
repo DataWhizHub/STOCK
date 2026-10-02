@@ -917,7 +917,7 @@ ENTRY_KEYS = [
     "re_event_type", "re_date", "re_main_cat_choice", "re_main_cat_new",
     "re_sub1_choice", "re_sub1_new", "re_sub2_choice", "re_sub2_new",
     "re_sub3_choice", "re_sub3_new",
-    "re_qty", "re_uom_choice", "re_uom_new", "re_grn", "re_unit_cost", "re_to_from", "re_desc",
+    "re_qty", "re_uom_choice", "re_uom_new", "re_grn", "re_unit_cost", "re_to_from_choice", "re_to_from_new", "re_desc",
 ]
 
 
@@ -982,11 +982,9 @@ def render_entry(df_office, df_all, user, office):
     # auto-generated Receive entry.
     grn_no = st.text_input("GRN NO (optional)", key="re_grn")
 
-    to_from = st.text_input(
-        "To / From *",
-        placeholder=f"e.g. a supplier, or '{other_office(office)}' for an inter-office transfer",
-        key="re_to_from",
-    )
+    # Pick the other office for an inter-office transfer, or choose
+    # "Add new..." to type any other location / supplier.
+    to_from = selectbox_with_add("To / From", [other_office(office)], "re_to_from")
     description = st.text_area("Description", height=80, key="re_desc")
 
     current_balance = None
