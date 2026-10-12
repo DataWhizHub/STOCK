@@ -1239,6 +1239,68 @@ def _selected_item_summary_table(df_all, main_cat: str):
     return display_df
 
 
+def _selected_summary_xlsx_bytes(tables: dict) -> bytes:
+    """Excel version of the Selected Item Summary download: for each
+    Main Category a "Main Category | <name>" row, then a bordered table
+    (Sub Category 1/2/3, Chilaw Stock, Palavi Stock, Total Stock, and an
+    empty Order column), with Total Stock in bold."""
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, Side
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Selected Item Summary"
+
+    thin = Side(style="thin", color="000000")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    stock_cols = {"Chilaw Stock", "Palavi Stock", "Total Stock"}
+    widths = {}
+
+    row_idx = 1
+    for i, (main_cat, table) in enumerate(tables.items()):
+        if i > 0:
+            row_idx += 1  # blank row between categories
+        ws.cell(row=row_idx, column=1, value="Main Category")
+        ws.cell(row=row_idx, column=2, value=main_cat).font = Font(bold=True)
+        row_idx += 1
+
+        headers = list(table.columns) + ["Order"]
+        ws.row_dimensions[row_idx].height = 32
+        for c, h in enumerate(headers, start=1):
+            cell = ws.cell(row=row_idx, column=c, value=h)
+            cell.border = border
+            cell.alignment = Alignment(wrap_text=True, vertical="bottom", horizontal="left")
+            if h not in stock_cols and h != "Order":
+                widths[c] = max(widths.get(c, 0), 12)
+        row_idx += 1
+
+        for rec in table.values.tolist():
+            for c, h in enumerate(headers, start=1):
+                val = rec[c - 1] if c - 1 < len(rec) else ""
+                if h in stock_cols and val != "":
+                    num = float(val)
+                    val = int(num) if num == int(num) else num
+                elif val == "":
+                    val = None
+                cell = ws.cell(row=row_idx, column=c, value=val)
+                cell.border = border
+                cell.alignment = Alignment(horizontal="left", vertical="bottom")
+                if h == "Total Stock":
+                    cell.font = Font(bold=True)
+                if h not in stock_cols and h != "Order" and val is not None:
+                    widths[c] = max(widths.get(c, 0), len(str(val)) + 2)
+            row_idx += 1
+
+    for c in range(1, 9):
+        ws.column_dimensions[get_column_letter(c)].width = min(max(widths.get(c, 9), 9), 45)
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def render_selected_item_summary(df_all):
     import csv
     import io
@@ -1267,27 +1329,40 @@ def render_selected_item_summary(df_all):
         else:
             st.dataframe(table, use_container_width=True, hide_index=True)
 
-    # Download: every selected Main Category as its own block in one CSV
-    # ("Main Category, <name>" row, then that category's table, then a blank row).
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    for i, (main_cat, table) in enumerate(tables.items()):
-        if i > 0:
-            writer.writerow([])
-        writer.writerow(["Main Category", main_cat])
-        writer.writerow(list(table.columns))
-        writer.writerows(table.values.tolist())
-
+    # Download: every selected Main Category as its own block in one Excel
+    # file ("Main Category | <name>" row, then that category's table).
     if len(selected) == 1:
-        file_name = f"{selected[0].replace(' ', '_').lower()}_item_summary.csv"
+        base_name = f"{selected[0].replace(' ', '_').lower()}_item_summary"
     else:
-        file_name = "selected_items_summary.csv"
+        base_name = "selected_items_summary"
+
+    try:
+        xlsx_bytes = _selected_summary_xlsx_bytes(tables)
+    except ImportError:
+        # openpyxl isn't installed - fall back to a plain CSV so the
+        # download still works (add `openpyxl` to requirements.txt).
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        for i, (main_cat, table) in enumerate(tables.items()):
+            if i > 0:
+                writer.writerow([])
+            writer.writerow(["Main Category", main_cat])
+            writer.writerow(list(table.columns) + ["Order"])
+            writer.writerows([row + [""] for row in table.values.tolist()])
+        st.download_button(
+            "⬇️ Download Selected Item Summary as CSV",
+            buf.getvalue().encode("utf-8"),
+            file_name=f"{base_name}.csv",
+            mime="text/csv",
+            key="dl_selected_item_summary",
+        )
+        return
 
     st.download_button(
-        "⬇️ Download Selected Item Summary as CSV",
-        buf.getvalue().encode("utf-8"),
-        file_name=file_name,
-        mime="text/csv",
+        "⬇️ Download Selected Item Summary as Excel",
+        xlsx_bytes,
+        file_name=f"{base_name}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="dl_selected_item_summary",
     )
 
