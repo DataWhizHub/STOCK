@@ -570,13 +570,19 @@ def _custom_column_sort_key_for_category(main_cat: str):
     return None
 
 
-def compute_pivot_and_balance(data: pd.DataFrame, as_of: pd.Timestamp, main_cat: str = ""):
+def compute_pivot_and_balance(
+    data: pd.DataFrame, as_of: pd.Timestamp, main_cat: str = "", from_date=None
+):
     """
     Builds a pivot with as many sub-category levels as this Main
     Category actually uses: just Sub Category 1 if that's all anyone
     ever filled in for it, Sub1+Sub2 if Sub2 is sometimes used, or
     Sub1+Sub2+Sub3 if Sub3 is ever used (a missing Sub2/Sub3 on a
     given row is simply left as an empty cell in the header).
+
+    If `from_date` is given, only transaction rows dated on/after that
+    day are listed in the table; the Balance row still reflects the
+    true running balance (all records up to `as_of`).
     """
     data = data.copy()
     sub2_used = data["Sub Category 2"].astype(str).str.strip().ne("").any()
@@ -600,6 +606,10 @@ def compute_pivot_and_balance(data: pd.DataFrame, as_of: pd.Timestamp, main_cat:
     if not isinstance(pivot.columns, pd.MultiIndex):
         pivot.columns = pd.MultiIndex.from_tuples([(c,) for c in pivot.columns])
     pivot = pivot.sort_index(level="Date")
+
+    # Date Range filter: only show rows from the chosen date onward.
+    if from_date is not None:
+        pivot = pivot[pivot.index.get_level_values("Date") >= pd.Timestamp(from_date)]
 
     balance_src = data[data["Date"] <= as_of]
     balance = balance_src.groupby(levels)["Signed Qty"].sum()
@@ -745,10 +755,11 @@ def stock_table_export_df(pivot, balance, columns, level_count, as_of) -> pd.Dat
 
 
 def render_office_table(
-    data: pd.DataFrame, as_of: pd.Timestamp, heading: str, file_prefix: str, key_suffix: str, main_cat: str = ""
+    data: pd.DataFrame, as_of: pd.Timestamp, heading: str, file_prefix: str, key_suffix: str,
+    main_cat: str = "", from_date=None
 ):
     st.markdown(f"#### {heading}")
-    pivot, balance, columns, level_count = compute_pivot_and_balance(data, as_of, main_cat)
+    pivot, balance, columns, level_count = compute_pivot_and_balance(data, as_of, main_cat, from_date)
     vehicle_map = load_vehicle_map()
     st.markdown(stock_table_html(pivot, balance, columns, level_count, as_of, vehicle_map), unsafe_allow_html=True)
     export_df = stock_table_export_df(pivot, balance, columns, level_count, as_of)
@@ -1323,19 +1334,25 @@ def render_view(df_office, office, df_all):
         return
 
     main_cat = st.selectbox("Main Category", main_cats)
+    from_date = st.date_input(
+        "Date Range - From Date (optional)",
+        value=None,
+        key="view_from_date",
+        help="Leave empty to show all records. Pick a date to show only records from that day onward.",
+    )
     today = pd.Timestamp(date.today())
     other_off = other_office(office)
 
     own_data = df_office[df_office["Main Category"] == main_cat].copy()
-    render_office_table(own_data, today, f"🏢 {office} (Your Office)", office, "own", main_cat)
+    render_office_table(own_data, today, f"🏢 {office} (Your Office)", office, "own", main_cat, from_date)
 
     st.divider()
     other_data = df_all[(df_all["Office"] == other_off) & (df_all["Main Category"] == main_cat)].copy()
-    render_office_table(other_data, today, f"🔁 {other_off} Office", other_off, "other", main_cat)
+    render_office_table(other_data, today, f"🔁 {other_off} Office", other_off, "other", main_cat, from_date)
 
     st.divider()
     total_data = df_all[df_all["Main Category"] == main_cat].copy()
-    render_office_table(total_data, today, "🌐 Total Stock (Both Offices)", "total", "total", main_cat)
+    render_office_table(total_data, today, "🌐 Total Stock (Both Offices)", "total", "total", main_cat, from_date)
 
 
 def render_edit(office):
