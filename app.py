@@ -804,7 +804,7 @@ def build_issue_slip_html(records: list, office: str) -> str:
     one or more Issue records. Date / Issued To / SN / Issued by are
     filled in from the saved record(s) when every record shares the
     same value, otherwise left blank for manual entry. Checked-by /
-    Receiver fields are always left blank for manual signing."""
+    Receiver / Approved-by fields are always left blank for manual signing."""
     if not records:
         return ""
 
@@ -897,6 +897,9 @@ def build_issue_slip_html(records: list, office: str) -> str:
     <tr>
       <td>Date: <span class="sign-line">&nbsp;</span></td>
       <td>Date: <span class="sign-line">&nbsp;</span></td>
+    </tr>
+    <tr>
+      <td colspan="2">Approved by: <span class="sign-line">&nbsp;</span></td>
     </tr>
   </table>
 </body>
