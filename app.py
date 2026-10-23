@@ -10,9 +10,16 @@ Google Sheet worksheets used:
                   "To/From" the other office; the other office sees it
                   under Notifications and can mark it Received, which
                   auto-adds a matching Receive entry to their own stock)
+
+Optional image files (place them in the same folder as this app.py, e.g. the
+GitHub repo root). If a file is missing the app still works, just without it:
+  - login_bg.jpg        : background photo of the login page
+  - KMN-Aqua-logo.png   : logo shown at the top of the sidebar
 """
 
+import base64
 import html as html_lib
+import os
 import re
 import uuid
 from datetime import date, datetime
@@ -37,6 +44,9 @@ STOCK_SHEET = "Stock"
 USERS_SHEET = "Users"
 TRANSFERS_SHEET = "Transfers"
 VEHICLES_SHEET = "Vehicles"
+
+LOGIN_BG_FILE = "login_bg.jpg"
+SIDEBAR_LOGO_FILE = "KMN-Aqua-logo.png"
 
 STOCK_HEADERS = [
     "Event Type", "Date", "Main Category", "Sub Category 1", "Sub Category 2", "Sub Category 3",
@@ -301,6 +311,219 @@ def offices_without_login(users: pd.DataFrame) -> list:
 
 
 # =========================================================
+# STYLING HELPERS (login page + sidebar)
+# =========================================================
+@st.cache_data(show_spinner=False)
+def _file_as_base64(filename: str, max_mb: int = 5) -> str:
+    """Reads an image that sits next to this app file and returns it as
+    base64 (so it can be embedded in CSS / HTML). Returns "" if the file
+    is missing or too large, so the app keeps working without it."""
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(base, filename)
+        if os.path.isfile(path) and os.path.getsize(path) <= max_mb * 1024 * 1024:
+            with open(path, "rb") as fh:
+                return base64.b64encode(fh.read()).decode("ascii")
+    except OSError:
+        pass
+    return ""
+
+
+def _mime_for(filename: str) -> str:
+    ext = filename.lower().rsplit(".", 1)[-1]
+    return {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}.get(ext, "image/jpeg")
+
+
+LOGIN_CSS = """
+<style>
+/* ---------- page background (tools-on-wood photo) ---------- */
+.stApp {
+    background: __BG__;
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+    background-repeat: no-repeat;
+}
+header[data-testid="stHeader"] { background: transparent; }
+[data-testid="stSidebar"],
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="collapsedControl"] { display: none !important; }
+.block-container { padding-top: 7vh !important; }
+
+/* ---------- frosted-glass login card ---------- */
+[data-testid="stForm"] {
+    background: rgba(232, 232, 232, 0.26);
+    -webkit-backdrop-filter: blur(16px);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 16px;
+    padding: 26px 38px 34px 38px;
+    box-shadow: 0 14px 44px rgba(0, 0, 0, 0.50), inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+.login-title {
+    text-align: center;
+    font-size: 1.85rem;
+    font-weight: 800;
+    letter-spacing: .4px;
+    color: #ececec;
+    text-shadow: 0 2px 3px rgba(0, 0, 0, 0.55), 0 -1px 0 rgba(255, 255, 255, 0.35);
+    margin: 4px 0 26px 0;
+    white-space: nowrap;
+}
+[data-testid="stForm"] label p { color: #f2f2f2 !important; font-weight: 600; }
+
+/* ---------- glass input fields ---------- */
+[data-testid="stForm"] div[data-baseweb="input"],
+[data-testid="stForm"] div[data-baseweb="select"] > div {
+    background: rgba(255, 255, 255, 0.20) !important;
+    border: 1px solid rgba(255, 255, 255, 0.60) !important;
+    border-radius: 10px !important;
+}
+[data-testid="stForm"] div[data-baseweb="input"] input {
+    background-color: transparent !important;
+    color: #ffffff !important;
+    font-size: 1.08rem;
+    height: 46px;
+    background-repeat: no-repeat;
+    background-position: 14px center;
+    background-size: 22px 22px;
+}
+[data-testid="stForm"] div[data-baseweb="input"] input::placeholder {
+    color: rgba(255, 255, 255, 0.88) !important;
+}
+[data-testid="stForm"] div[data-baseweb="input"] button { color: #fff !important; }
+[data-testid="stForm"] input[aria-label="Username"] {
+    padding-left: 52px !important;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23f2f2f2'><circle cx='12' cy='8' r='4.6'/><path d='M3.4 21.5c0-4.8 3.8-7.6 8.6-7.6s8.6 2.8 8.6 7.6z'/></svg>");
+}
+[data-testid="stForm"] input[aria-label="Password"] {
+    padding-left: 52px !important;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23f2f2f2'><path d='M14.5 2a6.5 6.5 0 0 0-6.2 8.4L2 16.7V22h5.3v-2.5h2.5V17h2.5l2.3-2.3A6.5 6.5 0 1 0 14.5 2zm2 4.4a1.9 1.9 0 1 1 0 3.8 1.9 1.9 0 0 1 0-3.8z'/></svg>");
+}
+
+/* ---------- dark metallic Login button ---------- */
+[data-testid="stFormSubmitButton"] button {
+    width: 100%;
+    height: 54px;
+    border-radius: 9px;
+    border: 1px solid #1c1c1c;
+    background: linear-gradient(180deg, #8d8d8d 0%, #5b5b5b 48%, #3b3b3b 52%, #2b2b2b 100%);
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    transition: filter .15s ease;
+}
+[data-testid="stFormSubmitButton"] button:hover { filter: brightness(1.18); border-color: #000; }
+[data-testid="stFormSubmitButton"] button p,
+[data-testid="stFormSubmitButton"] button div {
+    color: #ececec !important;
+    font-size: 1.45rem !important;
+    font-weight: 800 !important;
+    letter-spacing: .5px;
+    text-shadow: 0 2px 2px rgba(0, 0, 0, 0.7);
+}
+
+/* ---------- first-time setup expander ---------- */
+[data-testid="stExpander"] {
+    background: rgba(0, 0, 0, 0.38);
+    border: 1px solid rgba(255, 255, 255, 0.35);
+    border-radius: 12px;
+    margin-top: 14px;
+}
+[data-testid="stExpander"] summary p { color: #f5f5f5 !important; font-weight: 600; }
+[data-testid="stExpander"] [data-testid="stForm"] { background: rgba(255, 255, 255, 0.10); padding: 18px 20px; }
+[data-testid="stAlert"] { border-radius: 10px; }
+</style>
+"""
+
+
+SIDEBAR_CSS = """
+<style>
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #0b2545 0%, #13315c 100%);
+}
+[data-testid="stSidebar"] > div:first-child { padding-top: 1.2rem; }
+[data-testid="stSidebar"] .nav-logo {
+    display: flex; justify-content: center; align-items: center; padding: 2px 0 10px 0;
+}
+[data-testid="stSidebar"] .nav-logo img {
+    max-width: 70%; max-height: 90px; height: auto; object-fit: contain;
+}
+[data-testid="stSidebar"] .nav-brand {
+    padding: 4px 6px 14px 6px; margin-bottom: 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.18);
+}
+[data-testid="stSidebar"] .nav-brand-title {
+    color: #ffffff; font-size: 1.25rem; font-weight: 700; letter-spacing: .3px; line-height: 1.2;
+}
+[data-testid="stSidebar"] .nav-brand-sub {
+    color: #8da9c4; font-size: 0.78rem; margin-top: 3px; letter-spacing: .4px;
+}
+[data-testid="stSidebar"] .nav-user {
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 10px; padding: 9px 10px; margin: 4px 0 4px 0;
+}
+[data-testid="stSidebar"] .nav-avatar {
+    width: 36px; height: 36px; min-width: 36px; border-radius: 50%;
+    background: #1f77d0; color: #fff; font-weight: 700; font-size: 1rem;
+    display: flex; align-items: center; justify-content: center;
+    border: 1px solid #4a97e3;
+}
+[data-testid="stSidebar"] .nav-user-name { color: #ffffff; font-weight: 600; font-size: 0.92rem; line-height: 1.2; }
+[data-testid="stSidebar"] .nav-user-office { color: #8da9c4; font-size: 0.76rem; margin-top: 2px; }
+[data-testid="stSidebar"] .nav-group {
+    color: #8da9c4; font-size: 0.70rem; font-weight: 700; letter-spacing: 1.2px;
+    text-transform: uppercase; margin: 16px 0 6px 6px;
+}
+[data-testid="stSidebar"] .stButton { margin-bottom: -6px; }
+[data-testid="stSidebar"] .stButton > button {
+    width: 100%; justify-content: flex-start; text-align: left;
+    background: transparent; border: 1px solid transparent; border-radius: 8px;
+    padding: 0.45rem 0.8rem; color: #dbe7f3; font-weight: 500; box-shadow: none;
+}
+[data-testid="stSidebar"] .stButton > button p,
+[data-testid="stSidebar"] .stButton > button div {
+    color: #dbe7f3; text-align: left; font-size: 0.92rem;
+}
+[data-testid="stSidebar"] .stButton > button:hover {
+    background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.18);
+}
+[data-testid="stSidebar"] .stButton > button[kind="primary"] {
+    background: #1f77d0; border: 1px solid #4a97e3; color: #ffffff; font-weight: 600;
+}
+[data-testid="stSidebar"] .stButton > button[kind="primary"] p,
+[data-testid="stSidebar"] .stButton > button[kind="primary"] div { color: #ffffff; }
+
+/* Log out button — stands apart from the menu */
+[data-testid="stSidebar"] .st-key-logout_btn .stButton > button,
+[data-testid="stSidebar"] .st-key-logout_btn button {
+    border: 1px solid rgba(255,120,120,0.55); background: rgba(255,90,90,0.10);
+}
+[data-testid="stSidebar"] .st-key-logout_btn button p,
+[data-testid="stSidebar"] .st-key-logout_btn button div { color: #ffb4b4; font-weight: 600; text-align: center; }
+[data-testid="stSidebar"] .st-key-logout_btn button:hover { background: rgba(255,90,90,0.25); }
+
+/* Change-password expander on the dark background */
+[data-testid="stSidebar"] [data-testid="stExpander"] {
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.18); border-radius: 8px;
+}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary p,
+[data-testid="stSidebar"] [data-testid="stExpander"] label p { color: #dbe7f3 !important; }
+[data-testid="stSidebar"] div[data-baseweb="input"] { background: #ffffff !important; border-radius: 6px; }
+[data-testid="stSidebar"] div[data-baseweb="input"] input { color: #111111 !important; }
+[data-testid="stSidebar"] [data-testid="stFormSubmitButton"] button {
+    background: #1f77d0; border: 1px solid #4a97e3; border-radius: 8px;
+}
+[data-testid="stSidebar"] [data-testid="stFormSubmitButton"] button p { color: #ffffff; }
+[data-testid="stSidebar"] .nav-footer {
+    color: #8da9c4; font-size: 0.72rem; margin-top: 22px; padding: 10px 6px 0 6px;
+    border-top: 1px solid rgba(255,255,255,0.18); line-height: 1.5;
+}
+</style>
+"""
+
+
+# =========================================================
 # LOGIN / PROFILE SETUP UI
 # =========================================================
 def profile_setup_form(users: pd.DataFrame, pending_offices: list):
@@ -337,21 +560,29 @@ def profile_setup_form(users: pd.DataFrame, pending_offices: list):
 
 
 def login_form():
-    st.markdown("<h2 style='text-align:center;'>🔧 Vehicle Parts Stock - KMN</h2>", unsafe_allow_html=True)
+    # Background photo (falls back to a dark gradient if the file is missing).
+    bg_b64 = _file_as_base64(LOGIN_BG_FILE)
+    if bg_b64:
+        bg_css = (
+            "linear-gradient(rgba(0,0,0,0.18), rgba(0,0,0,0.18)), "
+            f"url('data:{_mime_for(LOGIN_BG_FILE)};base64,{bg_b64}')"
+        )
+    else:
+        bg_css = "linear-gradient(135deg, #1b1b1b 0%, #3a2a1c 55%, #1b1b1b 100%)"
+    st.markdown(LOGIN_CSS.replace("__BG__", bg_css), unsafe_allow_html=True)
+
     users = load_users()
     pending = offices_without_login(users)
 
-    _, col2, _ = st.columns([1, 1.2, 1])
+    _, col2, _ = st.columns([1, 1.25, 1])
     with col2:
-        if pending:
-            with st.expander("🆕 First time here? Set up your office login", expanded=False):
-                profile_setup_form(users, pending)
-            st.divider()
-
         with st.form("login_form"):
-            username = st.text_input("Username")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Log in", type="primary", use_container_width=True)
+            st.markdown("<div class='login-title'>🛠️ Vehicle Parts Stock - KMN</div>", unsafe_allow_html=True)
+            username = st.text_input("Username", placeholder="Username", label_visibility="collapsed")
+            password = st.text_input(
+                "Password", type="password", placeholder="Password", label_visibility="collapsed"
+            )
+            submitted = st.form_submit_button("Login", type="primary", use_container_width=True)
         if submitted:
             user = authenticate(username, password)
             if user:
@@ -359,6 +590,10 @@ def login_form():
                 st.rerun()
             else:
                 st.error("Invalid username or password.")
+
+        if pending:
+            with st.expander("🆕 First time here? Set up your office login", expanded=False):
+                profile_setup_form(users, pending)
 
 
 def require_login():
@@ -369,8 +604,9 @@ def require_login():
 
 
 def logout_button():
-    if st.sidebar.button("🚪 Log out", use_container_width=True):
+    if st.sidebar.button("🚪 Log out", use_container_width=True, key="logout_btn"):
         st.session_state.pop("user", None)
+        st.session_state.pop("_nav_page", None)
         st.rerun()
 
 
@@ -1579,6 +1815,97 @@ def render_notifications(office, user):
 
 
 # =========================================================
+# SIDEBAR NAVIGATION
+# =========================================================
+NAV_ENTRY = "entry"
+NAV_VIEW = "view"
+NAV_EDIT = "edit"
+NAV_SLIPS = "slips"
+NAV_FILTERS = "filters"
+NAV_SELECTED = "selected"
+NAV_PURCHASE = "purchase"
+NAV_NOTIF = "notifications"
+
+NAV_LABELS = {
+    NAV_ENTRY: "Record Entering",
+    NAV_VIEW: "View Stock",
+    NAV_EDIT: "Edit Records",
+    NAV_SLIPS: "Issue Slips",
+    NAV_FILTERS: "Filters Summary",
+    NAV_SELECTED: "Selected Item Summary",
+    NAV_PURCHASE: "Purchase Details",
+    NAV_NOTIF: "Notifications",
+}
+
+NAV_GROUPS = [
+    ("Stock Entry", [NAV_ENTRY, NAV_EDIT]),
+    ("Stock Overview", [NAV_VIEW, NAV_FILTERS, NAV_SELECTED]),
+    ("Documents & Costs", [NAV_SLIPS, NAV_PURCHASE]),
+    ("Inbox", [NAV_NOTIF]),
+]
+
+
+def _sidebar_logo_html() -> str:
+    b64 = _file_as_base64(SIDEBAR_LOGO_FILE)
+    if not b64:
+        return ""
+    return (
+        "<div class='nav-logo'>"
+        f"<img src='data:{_mime_for(SIDEBAR_LOGO_FILE)};base64,{b64}' alt='KMN'></div>"
+    )
+
+
+def render_sidebar(user: dict, office: str, pending_count: int) -> str:
+    """Branded sidebar with grouped menu buttons and a highlighted active
+    page. Returns the id of the page to show."""
+    st.markdown(SIDEBAR_CSS, unsafe_allow_html=True)
+
+    if "_nav_page" not in st.session_state:
+        st.session_state["_nav_page"] = NAV_ENTRY
+
+    initial = (str(user.get("name", "")).strip()[:1] or "?").upper()
+    st.sidebar.markdown(
+        f"{_sidebar_logo_html()}"
+        "<div class='nav-brand'>"
+        "<div class='nav-brand-title'>Vehicle Parts Stock</div>"
+        "<div class='nav-brand-sub'>KMN &middot; Stock Maintaining System</div>"
+        "</div>"
+        "<div class='nav-user'>"
+        f"<div class='nav-avatar'>{_esc(initial)}</div>"
+        "<div>"
+        f"<div class='nav-user-name'>{_esc(user.get('name', ''))}</div>"
+        f"<div class='nav-user-office'>{_esc(office)} Office</div>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
+
+    for group_name, page_ids in NAV_GROUPS:
+        st.sidebar.markdown(f"<div class='nav-group'>{group_name}</div>", unsafe_allow_html=True)
+        for page_id in page_ids:
+            label = NAV_LABELS[page_id]
+            if page_id == NAV_NOTIF and pending_count:
+                label = f"{label} ({pending_count})"
+            is_active = st.session_state["_nav_page"] == page_id
+            if st.sidebar.button(
+                label,
+                key=f"nav_btn_{page_id}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+            ):
+                st.session_state["_nav_page"] = page_id
+                st.rerun()
+
+    st.sidebar.markdown("<div class='nav-group'>Account</div>", unsafe_allow_html=True)
+    change_password_ui(user)
+    logout_button()
+    st.sidebar.markdown(
+        f"<div class='nav-footer'>{date.today().strftime('%d %b %Y')}<br>{_esc(office)} Office</div>",
+        unsafe_allow_html=True,
+    )
+    return st.session_state["_nav_page"]
+
+
+# =========================================================
 # MAIN
 # =========================================================
 def main():
@@ -1586,37 +1913,24 @@ def main():
     office = user["office"]
 
     pending_count = len(pending_incoming_transfers(office))
-    notif_label = f"📬 Notifications ({pending_count})" if pending_count else "📬 Notifications"
-
-    st.sidebar.markdown(f"### 👤 {user['name']}")
-    st.sidebar.markdown(f"**Office:** {office}")
-    st.sidebar.divider()
-    page = st.sidebar.radio(
-        "Menu",
-        ["📥 Record Entering", "📊 View Stock", "✏️ Edit Records", "🖨️ Slips", "📦 Filters Summary",
-         "🔎 Selected Item Summary", "💰 Purchase Details", notif_label],
-        label_visibility="collapsed",
-    )
-    st.sidebar.divider()
-    change_password_ui(user)
-    logout_button()
+    page = render_sidebar(user, office, pending_count)
 
     df_all = load_stock()
     df_office = df_all[df_all["Office"] == office].copy() if not df_all.empty else df_all
 
-    if page.startswith("📥"):
+    if page == NAV_ENTRY:
         render_entry(df_office, df_all, user, office)
-    elif page.startswith("📊"):
+    elif page == NAV_VIEW:
         render_view(df_office, office, df_all)
-    elif page.startswith("✏️"):
+    elif page == NAV_EDIT:
         render_edit(office)
-    elif page.startswith("🖨️"):
+    elif page == NAV_SLIPS:
         render_slips(df_office, office)
-    elif page.startswith("📦"):
+    elif page == NAV_FILTERS:
         render_filters_summary(df_all)
-    elif page.startswith("🔎"):
+    elif page == NAV_SELECTED:
         render_selected_item_summary(df_all)
-    elif page.startswith("💰"):
+    elif page == NAV_PURCHASE:
         render_purchase_details(df_office, office)
     else:
         render_notifications(office, user)
