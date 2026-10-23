@@ -348,7 +348,15 @@ header[data-testid="stHeader"] { background: transparent; }
 [data-testid="stSidebar"],
 [data-testid="stSidebarCollapsedControl"],
 [data-testid="collapsedControl"] { display: none !important; }
-.block-container { padding-top: 7vh !important; }
+.block-container, [data-testid="stMainBlockContainer"] {
+    padding-top: 0 !important; padding-bottom: 0 !important; max-width: 100% !important;
+}
+.block-container > [data-testid="stVerticalBlock"],
+[data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"] {
+    min-height: 100vh; justify-content: center; align-items: stretch;
+}
+.login-logo { display: flex; justify-content: center; margin: 0 0 8px 0; }
+.login-logo img { max-height: 84px; max-width: 60%; object-fit: contain; }
 
 /* ---------- frosted-glass login card ---------- */
 [data-testid="stForm"] {
@@ -481,9 +489,17 @@ SIDEBAR_CSS = """
     background: transparent; border: 1px solid transparent; border-radius: 8px;
     padding: 0.45rem 0.8rem; color: #dbe7f3; font-weight: 500; box-shadow: none;
 }
+[data-testid="stSidebar"] .stButton > button,
+[data-testid="stSidebar"] .stButton > button > div {
+    justify-content: flex-start !important; align-items: center;
+}
+[data-testid="stSidebar"] .stButton > button > div,
+[data-testid="stSidebar"] .stButton > button [data-testid="stMarkdownContainer"] {
+    width: 100%; display: flex; justify-content: flex-start !important; text-align: left !important;
+}
 [data-testid="stSidebar"] .stButton > button p,
 [data-testid="stSidebar"] .stButton > button div {
-    color: #dbe7f3; text-align: left; font-size: 0.92rem;
+    color: #dbe7f3; text-align: left !important; font-size: 0.92rem;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
     background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.18);
@@ -500,7 +516,7 @@ SIDEBAR_CSS = """
     border: 1px solid rgba(255,120,120,0.55); background: rgba(255,90,90,0.10);
 }
 [data-testid="stSidebar"] .st-key-logout_btn button p,
-[data-testid="stSidebar"] .st-key-logout_btn button div { color: #ffb4b4; font-weight: 600; text-align: center; }
+[data-testid="stSidebar"] .st-key-logout_btn button div { color: #ffb4b4; font-weight: 600; text-align: left !important; }
 [data-testid="stSidebar"] .st-key-logout_btn button:hover { background: rgba(255,90,90,0.25); }
 
 /* Change-password expander on the dark background */
@@ -577,6 +593,13 @@ def login_form():
     _, col2, _ = st.columns([1, 1.25, 1])
     with col2:
         with st.form("login_form"):
+            _logo_b64 = _file_as_base64(SIDEBAR_LOGO_FILE)
+            if _logo_b64:
+                st.markdown(
+                    "<div class='login-logo'>"
+                    f"<img src='data:{_mime_for(SIDEBAR_LOGO_FILE)};base64,{_logo_b64}' alt='KMN'></div>",
+                    unsafe_allow_html=True,
+                )
             st.markdown("<div class='login-title'>🛠️ Vehicle Parts Stock - KMN</div>", unsafe_allow_html=True)
             username = st.text_input("Username", placeholder="Username", label_visibility="collapsed")
             password = st.text_input(
