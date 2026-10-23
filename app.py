@@ -314,16 +314,24 @@ def offices_without_login(users: pd.DataFrame) -> list:
 # STYLING HELPERS (login page + sidebar)
 # =========================================================
 @st.cache_data(show_spinner=False)
+def _read_b64(path: str) -> str:
+    with open(path, "rb") as fh:
+        return base64.b64encode(fh.read()).decode("ascii")
+
+
 def _file_as_base64(filename: str, max_mb: int = 5) -> str:
-    """Reads an image that sits next to this app file and returns it as
+    """Reads an image that sits next to this app file (file name matched
+    ignoring upper/lower case) or in the working folder, and returns it as
     base64 (so it can be embedded in CSS / HTML). Returns "" if the file
     is missing or too large, so the app keeps working without it."""
     try:
-        base = os.path.dirname(os.path.abspath(__file__))
-        path = os.path.join(base, filename)
-        if os.path.isfile(path) and os.path.getsize(path) <= max_mb * 1024 * 1024:
-            with open(path, "rb") as fh:
-                return base64.b64encode(fh.read()).decode("ascii")
+        folders = [os.path.dirname(os.path.abspath(__file__)), os.getcwd()]
+        for base in folders:
+            for name in os.listdir(base):
+                if name.lower() == filename.lower():
+                    path = os.path.join(base, name)
+                    if os.path.isfile(path) and os.path.getsize(path) <= max_mb * 1024 * 1024:
+                        return _read_b64(path)
     except OSError:
         pass
     return ""
