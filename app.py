@@ -838,7 +838,8 @@ def _custom_column_sort_key_for_category(main_cat: str):
 
 
 def compute_pivot_and_balance(
-    data: pd.DataFrame, as_of: pd.Timestamp, main_cat: str = "", from_date=None
+    data: pd.DataFrame, as_of: pd.Timestamp, main_cat: str = "", from_date=None,
+    to_date=None, show_office: bool = False
 ):
     """
     Builds a pivot with as many sub-category levels as this Main
@@ -847,9 +848,12 @@ def compute_pivot_and_balance(
     Sub1+Sub2+Sub3 if Sub3 is ever used (a missing Sub2/Sub3 on a
     given row is simply left as an empty cell in the header).
 
-    If `from_date` is given, only transaction rows dated on/after that
-    day are listed in the table; the Balance row still reflects the
-    true running balance (all records up to `as_of`).
+    If `from_date` / `to_date` are given, only transaction rows dated
+    within that range (inclusive) are listed in the table; the Balance
+    row reflects the running balance of all records up to `as_of`.
+
+    If `show_office` is True, an "Office" column is placed right after
+    Date (used by the Total Stock table that combines both offices).
     """
     data = data.copy()
     sub2_used = data["Sub Category 2"].astype(str).str.strip().ne("").any()
@@ -864,8 +868,10 @@ def compute_pivot_and_balance(
 
     data["Signed Qty"] = data["Quantity"] * data["Event Type"].map(SIGN_MAP).fillna(1)
 
+    index_cols = ["Date", "Office", "To/From", "Description"] if show_office else ["Date", "To/From", "Description"]
+
     pivot = data.pivot_table(
-        index=["Date", "To/From", "Description"],
+        index=index_cols,
         columns=levels,
         values="Signed Qty",
         aggfunc="sum",
@@ -874,9 +880,11 @@ def compute_pivot_and_balance(
         pivot.columns = pd.MultiIndex.from_tuples([(c,) for c in pivot.columns])
     pivot = pivot.sort_index(level="Date")
 
-    # Date Range filter: only show rows from the chosen date onward.
+    # Date Range filter: only show rows between the chosen dates (inclusive).
     if from_date is not None:
         pivot = pivot[pivot.index.get_level_values("Date") >= pd.Timestamp(from_date)]
+    if to_date is not None:
+        pivot = pivot[pivot.index.get_level_values("Date") <= pd.Timestamp(to_date)]
 
     balance_src = data[data["Date"] <= as_of]
     balance = balance_src.groupby(levels)["Signed Qty"].sum()
@@ -953,6 +961,11 @@ def _render_header_rows_html(row_specs: list, row_h: int = 35) -> list:
 
 
 def stock_table_html(pivot, balance, columns, level_count, as_of, vehicle_map: dict = None) -> str:
+    # Number of leading (non-item) columns: Date, To/From, Description
+    # (or Date, Office, To/From, Description for the combined table).
+    index_names = list(pivot.index.names)
+    lead = len(index_names)
+
     css = """
 <style>
 .spk-wrap { max-height: 480px; overflow-y: auto; border: 1px solid rgba(128,128,128,.4); border-radius: 8px; }
@@ -961,20 +974,17 @@ table.spk-table th, table.spk-table td {
     border: 1px solid rgba(128,128,128,.35); padding: 6px 10px; text-align: center; white-space: nowrap;
 }
 table.spk-table thead th { position: sticky; background: #262730; color: #fafafa; z-index: 3; }
-table.spk-table td:nth-child(-n+3), table.spk-table th:nth-child(-n+3) { text-align: left; }
+table.spk-table td:nth-child(-n+__LEAD__), table.spk-table th:nth-child(-n+__LEAD__) { text-align: left; }
 table.spk-table tfoot td { position: sticky; bottom: 0; background: #143d14; color: #fafafa; font-weight: 700; z-index: 3; }
 </style>
-"""
+""".replace("__LEAD__", str(lead))
     row_specs = _build_header_row_specs(columns, level_count, vehicle_map)
     header_rows = _render_header_rows_html(row_specs)
     total_header_rows = len(row_specs)
 
     thead = "<thead><tr>"
-    thead += (
-        f'<th rowspan="{total_header_rows}" style="top:0;">Date</th>'
-        f'<th rowspan="{total_header_rows}" style="top:0;">To/From</th>'
-        f'<th rowspan="{total_header_rows}" style="top:0;">Description</th>'
-    )
+    for name in index_names:
+        thead += f'<th rowspan="{total_header_rows}" style="top:0;">{_esc(name)}</th>'
     thead += header_rows[0] + "</tr>"
     for r in header_rows[1:]:
         thead += f"<tr>{r}</tr>"
@@ -982,17 +992,20 @@ table.spk-table tfoot td { position: sticky; bottom: 0; background: #143d14; col
 
     tbody = "<tbody>"
     if pivot.empty:
-        tbody += f'<tr><td colspan="{3 + len(columns) or 4}" style="text-align:center;">No records for this Main Category yet.</td></tr>'
+        tbody += f'<tr><td colspan="{lead + len(columns) or lead + 1}" style="text-align:center;">No records for this Main Category yet.</td></tr>'
     else:
-        for (d, tf, desc), row in pivot.iterrows():
+        for idx, row in pivot.iterrows():
+            d = idx[0]
             d_str = d.strftime("%Y-%m-%d") if pd.notna(d) else ""
-            tbody += f"<tr><td>{_esc(d_str)}</td><td>{_esc(tf)}</td><td>{_esc(desc)}</td>"
+            tbody += f"<tr><td>{_esc(d_str)}</td>"
+            for extra in idx[1:]:
+                tbody += f"<td>{_esc(extra)}</td>"
             for col in columns:
                 tbody += f"<td>{_fmt_num(row.get(col))}</td>"
             tbody += "</tr>"
     tbody += "</tbody>"
 
-    tfoot = f'<tfoot><tr><td colspan="3">Balance (as of {as_of.strftime("%Y-%m-%d")})</td>'
+    tfoot = f'<tfoot><tr><td colspan="{lead}">Balance (as of {as_of.strftime("%Y-%m-%d")})</td>'
     for col in columns:
         tfoot += f"<td>{_fmt_num(balance.get(col, 0))}</td>"
     tfoot += "</tr></tfoot>"
@@ -1004,29 +1017,37 @@ def stock_table_export_df(pivot, balance, columns, level_count, as_of) -> pd.Dat
     def colname(col):
         return " - ".join(col)
 
+    index_names = list(pivot.index.names)
+
     rows = []
-    for (d, tf, desc), row in pivot.iterrows():
+    for idx, row in pivot.iterrows():
+        d = idx[0]
         d_str = d.strftime("%Y-%m-%d") if pd.notna(d) else ""
-        rec = {"Date": d_str, "To/From": tf, "Description": desc}
+        rec = {index_names[0]: d_str}
+        for name, val in zip(index_names[1:], idx[1:]):
+            rec[name] = val
         for col in columns:
             val = row.get(col)
             rec[colname(col)] = "" if pd.isna(val) else val
         rows.append(rec)
 
-    balance_rec = {"Date": "", "To/From": "", "Description": f"Balance (as of {as_of.strftime('%Y-%m-%d')})"}
+    balance_rec = {name: "" for name in index_names}
+    balance_rec["Description"] = f"Balance (as of {as_of.strftime('%Y-%m-%d')})"
     for col in columns:
         balance_rec[colname(col)] = balance.get(col, 0)
     rows.append(balance_rec)
 
-    return pd.DataFrame(rows, columns=["Date", "To/From", "Description"] + [colname(c) for c in columns])
+    return pd.DataFrame(rows, columns=index_names + [colname(c) for c in columns])
 
 
 def render_office_table(
     data: pd.DataFrame, as_of: pd.Timestamp, heading: str, file_prefix: str, key_suffix: str,
-    main_cat: str = "", from_date=None
+    main_cat: str = "", from_date=None, to_date=None, show_office: bool = False
 ):
     st.markdown(f"#### {heading}")
-    pivot, balance, columns, level_count = compute_pivot_and_balance(data, as_of, main_cat, from_date)
+    pivot, balance, columns, level_count = compute_pivot_and_balance(
+        data, as_of, main_cat, from_date, to_date, show_office
+    )
     vehicle_map = load_vehicle_map()
     st.markdown(stock_table_html(pivot, balance, columns, level_count, as_of, vehicle_map), unsafe_allow_html=True)
     export_df = stock_table_export_df(pivot, balance, columns, level_count, as_of)
@@ -1679,25 +1700,49 @@ def render_view(df_office, office, df_all):
         return
 
     main_cat = st.selectbox("Main Category", main_cats)
-    from_date = st.date_input(
-        "Date Range - From Date (optional)",
-        value=None,
-        key="view_from_date",
-        help="Leave empty to show all records. Pick a date to show only records from that day onward.",
-    )
+
+    dc1, dc2 = st.columns(2)
+    with dc1:
+        from_date = st.date_input(
+            "From Date (optional)",
+            value=None,
+            key="view_from_date",
+            help="Leave empty to start from the first record.",
+        )
+    with dc2:
+        to_date = st.date_input(
+            "To Date (optional)",
+            value=None,
+            key="view_to_date",
+            help="Leave empty to include records up to today and later.",
+        )
+
+    if from_date and to_date and from_date > to_date:
+        st.warning("From Date is later than To Date — please correct the date range.")
+        return
+
     today = pd.Timestamp(date.today())
+    # With a To Date chosen, the Balance row shows the balance as of that date.
+    as_of = pd.Timestamp(to_date) if to_date else today
     other_off = other_office(office)
 
     own_data = df_office[df_office["Main Category"] == main_cat].copy()
-    render_office_table(own_data, today, f"🏢 {office} (Your Office)", office, "own", main_cat, from_date)
+    render_office_table(
+        own_data, as_of, f"🏢 {office} (Your Office)", office, "own", main_cat, from_date, to_date
+    )
 
     st.divider()
     other_data = df_all[(df_all["Office"] == other_off) & (df_all["Main Category"] == main_cat)].copy()
-    render_office_table(other_data, today, f"🔁 {other_off} Office", other_off, "other", main_cat, from_date)
+    render_office_table(
+        other_data, as_of, f"🔁 {other_off} Office", other_off, "other", main_cat, from_date, to_date
+    )
 
     st.divider()
     total_data = df_all[df_all["Main Category"] == main_cat].copy()
-    render_office_table(total_data, today, "🌐 Total Stock (Both Offices)", "total", "total", main_cat, from_date)
+    render_office_table(
+        total_data, as_of, "🌐 Total Stock (Both Offices)", "total", "total", main_cat, from_date, to_date,
+        show_office=True,
+    )
 
 
 def render_edit(office):
