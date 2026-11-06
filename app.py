@@ -15,6 +15,10 @@ Optional image files (place them in the same folder as this app.py, e.g. the
 GitHub repo root). If a file is missing the app still works, just without it:
   - login_bg.jpg        : background photo of the login page
   - KMN-Aqua-logo.png   : logo shown at the top of the sidebar
+
+Optional packages (add to requirements.txt):
+  - openpyxl   : Excel download in Selected Item Summary
+  - reportlab  : PDF download of the Item Summary Report
 """
 
 import base64
@@ -1592,33 +1596,11 @@ def _selected_summary_xlsx_bytes(tables: dict) -> bytes:
     return buf.getvalue()
 
 
-def render_selected_item_summary(df_all):
+def _render_selected_summary_download(tables: dict, selected: list):
+    """Download button(s) for the Selected Item Summary tables (Excel,
+    or CSV if openpyxl isn't installed)."""
     import csv
     import io
-
-    st.title("🔎 Selected Item Summary")
-    st.caption("Pick one or more Main Categories to see stock levels across both offices")
-
-    main_cats = sorted({m for m in df_all["Main Category"].tolist() if m})
-    if not main_cats:
-        st.info("No records yet.")
-        return
-
-    selected = st.multiselect("Main Categories", main_cats, key="sis_main_cats")
-    if not selected:
-        st.info("Select one or more Main Categories to see their summary.")
-        return
-
-    # One heading + table per selected Main Category.
-    tables = {}
-    for main_cat in selected:
-        table = _selected_item_summary_table(df_all, main_cat)
-        tables[main_cat] = table
-        st.markdown(f"#### {main_cat}")
-        if table.empty:
-            st.info("No records yet for this Main Category.")
-        else:
-            st.dataframe(table, use_container_width=True, hide_index=True)
 
     # Download: every selected Main Category as its own block in one Excel
     # file ("Main Category | <name>" row, then that category's table).
@@ -1656,6 +1638,326 @@ def render_selected_item_summary(df_all):
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         key="dl_selected_item_summary",
     )
+
+
+# ---------- Item Summary Report (merged-cell layout, CSV + PDF) ----------
+def _item_report_data(df_all, main_cat: str):
+    """One row per Sub Category 1 / 2 / 3 combination for a Main Category
+    with Chilaw, Palavi and Total stock, the Vehicles lookup (by Sub
+    Category 2) and the combined 'Total Stock' of each Sub Category 2.
+    Returns None if the category has no records."""
+    df_cat = df_all[df_all["Main Category"] == main_cat].copy()
+    if df_cat.empty:
+        return None
+
+    df_cat["Signed Qty"] = df_cat["Quantity"] * df_cat["Event Type"].map(SIGN_MAP).fillna(1)
+
+    grouped = (
+        df_cat.groupby(["Sub Category 1", "Sub Category 2", "Sub Category 3", "Office"])["Signed Qty"]
+        .sum()
+        .unstack("Office", fill_value=0.0)
+    )
+    for off in OFFICES:
+        if off not in grouped.columns:
+            grouped[off] = 0.0
+    grouped["Total"] = grouped[OFFICES].sum(axis=1)
+    grouped = grouped.reset_index()
+
+    grouped = grouped.sort_values(
+        ["Sub Category 1", "Sub Category 2", "Sub Category 3"],
+        key=lambda s: s.astype(str).str.lower(),
+    ).reset_index(drop=True)
+
+    grouped["Vehicles"] = grouped["Sub Category 2"].map(load_vehicle_map()).fillna("")
+    grouped["Sub2 Total"] = grouped.groupby(["Sub Category 1", "Sub Category 2"])["Total"].transform("sum")
+    return grouped
+
+
+def _item_report_show_vehicles(grouped, main_cat: str) -> bool:
+    """Vehicles column is always shown for Filters; for any other Main
+    Category only if at least one Sub Category 2 has a vehicle match."""
+    if main_cat.strip().lower() == "filters":
+        return True
+    return bool(grouped["Vehicles"].astype(str).str.strip().ne("").any())
+
+
+def _item_report_layout(grouped, show_veh: bool):
+    """Turns the grouped data into the report layout:
+    Sub Category 1 | Vehicles | Sub Category 2 | Total Stock |
+    Sub Category 3 | Chilaw | Palavi | Total | Order
+    where Sub Category 1 is merged down its group, and Vehicles /
+    Sub Category 2 / Total Stock are merged down each Sub Category 2
+    group. Returns (headers, rows, sub1_spans, sub2_spans, show_veh);
+    rows have the merged cells filled only on the first row of a group,
+    spans are lists of [first_row, last_row] (0-based, data rows)."""
+    headers = ["Sub Category 1"]
+    if show_veh:
+        headers.append("Vehicles")
+    headers += ["Sub Category 2", "Total Stock", "Sub Category 3", "Chilaw", "Palavi", "Total", "Order"]
+
+    rows, sub1_spans, sub2_spans = [], [], []
+    prev1, prev2 = None, None
+    for i, rec in grouped.iterrows():
+        k1 = rec["Sub Category 1"]
+        k2 = (k1, rec["Sub Category 2"])
+        new1 = k1 != prev1
+        new2 = k2 != prev2
+
+        if new1:
+            sub1_spans.append([i, i])
+        else:
+            sub1_spans[-1][1] = i
+        if new2:
+            sub2_spans.append([i, i])
+        else:
+            sub2_spans[-1][1] = i
+        prev1, prev2 = k1, k2
+
+        row = [k1 if new1 else ""]
+        if show_veh:
+            row.append(rec["Vehicles"] if new2 else "")
+        row += [
+            rec["Sub Category 2"] if new2 else "",
+            _fmt_num(rec["Sub2 Total"]) if new2 else "",
+            rec["Sub Category 3"],
+            _fmt_num(rec["Chilaw"]),
+            _fmt_num(rec["Palavi"]),
+            _fmt_num(rec["Total"]),
+            "",
+        ]
+        rows.append(row)
+
+    return headers, rows, sub1_spans, sub2_spans, show_veh
+
+
+def _item_report_html(headers, rows, sub1_spans, sub2_spans, show_veh) -> str:
+    """On-screen preview of the report with real merged (rowspan) cells."""
+    css = """
+<style>
+.irp-wrap { max-height: 520px; overflow: auto; border: 1px solid rgba(128,128,128,.4); border-radius: 8px; }
+table.irp-table { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.irp-table th, table.irp-table td {
+    border: 1px solid rgba(128,128,128,.45); padding: 6px 10px; text-align: center; vertical-align: middle;
+}
+table.irp-table thead th { position: sticky; top: 0; background: #262730; color: #fafafa; z-index: 3; }
+table.irp-table td.l { text-align: left; }
+table.irp-table td.b { font-weight: 700; }
+</style>
+"""
+    s1_len = {s: e - s + 1 for s, e in sub1_spans}
+    s2_len = {s: e - s + 1 for s, e in sub2_spans}
+
+    thead = "<thead><tr>" + "".join(f"<th>{_esc(h)}</th>" for h in headers) + "</tr></thead>"
+
+    tbody = "<tbody>"
+    for i, row in enumerate(rows):
+        tr = "<tr>"
+        for h, v in zip(headers, row):
+            if h == "Sub Category 1":
+                if i in s1_len:
+                    tr += f'<td rowspan="{s1_len[i]}">{_esc(v)}</td>'
+            elif h in ("Vehicles", "Sub Category 2", "Total Stock"):
+                if i in s2_len:
+                    cls = ' class="l"' if h == "Vehicles" else ""
+                    tr += f'<td rowspan="{s2_len[i]}"{cls}>{_esc(v)}</td>'
+            elif h == "Sub Category 3":
+                tr += f'<td class="l">{_esc(v)}</td>'
+            elif h == "Total":
+                tr += f'<td class="b">{_esc(v)}</td>'
+            else:
+                tr += f"<td>{_esc(v)}</td>"
+        tr += "</tr>"
+        tbody += tr
+    tbody += "</tbody>"
+
+    return f'{css}<div class="irp-wrap"><table class="irp-table">{thead}{tbody}</table></div>'
+
+
+def _item_report_csv_bytes(blocks: dict) -> bytes:
+    """CSV version of the report: a 'Main Category | <name>' row, then the
+    table in the same merged-cell layout (merged cells are written once,
+    on the first row of their group). utf-8 with BOM so Excel opens it
+    correctly."""
+    import csv
+    import io
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["Item Summary Report"])
+    for main_cat, (headers, rows, _s1, _s2, _veh) in blocks.items():
+        writer.writerow([])
+        writer.writerow(["Main Category", main_cat])
+        writer.writerow(headers)
+        writer.writerows(rows)
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def _item_report_pdf_bytes(blocks: dict) -> bytes:
+    """PDF version of the report (A4 landscape) with merged cells, one
+    table per selected Main Category. Needs `reportlab`."""
+    import io
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER, TA_LEFT
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(
+        buf, pagesize=landscape(A4), leftMargin=24, rightMargin=24, topMargin=24, bottomMargin=24,
+        title="Item Summary Report",
+    )
+    avail = doc.width
+
+    styles = getSampleStyleSheet()
+    cell_c = ParagraphStyle("irp_c", parent=styles["Normal"], fontSize=8, leading=10, alignment=TA_CENTER)
+    cell_l = ParagraphStyle("irp_l", parent=cell_c, alignment=TA_LEFT)
+    cell_b = ParagraphStyle("irp_b", parent=cell_c, fontName="Helvetica-Bold")
+    cell_h = ParagraphStyle("irp_h", parent=cell_c, fontName="Helvetica-Bold")
+
+    weights = {
+        "Sub Category 1": 1.0, "Vehicles": 2.1, "Sub Category 2": 1.1, "Total Stock": 0.8,
+        "Sub Category 3": 1.1, "Chilaw": 0.7, "Palavi": 0.7, "Total": 0.7, "Order": 0.8,
+    }
+    left_cols = {"Vehicles", "Sub Category 3"}
+    bold_cols = {"Total"}
+
+    story = [
+        Paragraph("Item Summary Report", styles["Title"]),
+        Paragraph(f"Generated on {date.today().strftime('%d %b %Y')}", styles["Normal"]),
+        Spacer(1, 8),
+    ]
+
+    for n, (main_cat, (headers, rows, sub1_spans, sub2_spans, show_veh)) in enumerate(blocks.items()):
+        if n > 0:
+            story.append(Spacer(1, 16))
+        story.append(Paragraph(f"Main Category: <b>{_esc(main_cat)}</b>", styles["Heading3"]))
+
+        w = [weights[h] for h in headers]
+        scale = avail / sum(w)
+        col_w = [x * scale for x in w]
+
+        data = [[Paragraph(_esc(h), cell_h) for h in headers]]
+        for r in rows:
+            line = []
+            for h, v in zip(headers, r):
+                style = cell_l if h in left_cols else (cell_b if h in bold_cols else cell_c)
+                line.append(Paragraph(_esc(v), style))
+            data.append(line)
+
+        cmds = [
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+            ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E6E6E6")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ]
+
+        # Sub Category 1 merged down its group (header row is row 0).
+        for s, e in sub1_spans:
+            if e > s:
+                cmds.append(("SPAN", (0, s + 1), (0, e + 1)))
+
+        # Vehicles / Sub Category 2 / Total Stock merged down each Sub Category 2 group.
+        first_col = headers.index("Vehicles") if show_veh else headers.index("Sub Category 2")
+        last_col = headers.index("Total Stock")
+        for s, e in sub2_spans:
+            if e > s:
+                for c in range(first_col, last_col + 1):
+                    cmds.append(("SPAN", (c, s + 1), (c, e + 1)))
+
+        story.append(Table(data, colWidths=col_w, repeatRows=1, style=TableStyle(cmds)))
+
+    doc.build(story)
+    return buf.getvalue()
+
+
+def render_item_summary_report(df_all, selected: list):
+    """'Item Summary Report' section of the Selected Item Summary page:
+    previews the merged-cell report for every selected Main Category and
+    offers it as CSV and PDF."""
+    st.divider()
+    st.markdown("### 📑 Item Summary Report")
+    st.caption("Sub Category 1 → Vehicles → Sub Category 2 → Sub Category 3 with Chilaw / Palavi / Total stock")
+
+    blocks = {}
+    for main_cat in selected:
+        grouped = _item_report_data(df_all, main_cat)
+        if grouped is None:
+            continue
+        show_veh = _item_report_show_vehicles(grouped, main_cat)
+        blocks[main_cat] = _item_report_layout(grouped, show_veh)
+
+    if not blocks:
+        st.info("No records yet for the selected Main Categories.")
+        return
+
+    for main_cat, blk in blocks.items():
+        st.markdown(f"#### {main_cat}")
+        st.markdown(_item_report_html(*blk), unsafe_allow_html=True)
+
+    if len(selected) == 1:
+        base_name = f"{selected[0].replace(' ', '_').lower()}_item_summary_report"
+    else:
+        base_name = "item_summary_report"
+
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button(
+            "⬇️ Download Item Summary Report as CSV",
+            _item_report_csv_bytes(blocks),
+            file_name=f"{base_name}.csv",
+            mime="text/csv",
+            key="dl_item_report_csv",
+            use_container_width=True,
+        )
+    with d2:
+        try:
+            pdf_bytes = _item_report_pdf_bytes(blocks)
+        except ImportError:
+            pdf_bytes = None
+        if pdf_bytes is None:
+            st.info("PDF download needs the `reportlab` package — add `reportlab` to requirements.txt.")
+        else:
+            st.download_button(
+                "⬇️ Download Item Summary Report as PDF",
+                pdf_bytes,
+                file_name=f"{base_name}.pdf",
+                mime="application/pdf",
+                key="dl_item_report_pdf",
+                use_container_width=True,
+            )
+
+
+def render_selected_item_summary(df_all):
+    st.title("🔎 Selected Item Summary")
+    st.caption("Pick one or more Main Categories to see stock levels across both offices")
+
+    main_cats = sorted({m for m in df_all["Main Category"].tolist() if m})
+    if not main_cats:
+        st.info("No records yet.")
+        return
+
+    selected = st.multiselect("Main Categories", main_cats, key="sis_main_cats")
+    if not selected:
+        st.info("Select one or more Main Categories to see their summary.")
+        return
+
+    # One heading + table per selected Main Category.
+    tables = {}
+    for main_cat in selected:
+        table = _selected_item_summary_table(df_all, main_cat)
+        tables[main_cat] = table
+        st.markdown(f"#### {main_cat}")
+        if table.empty:
+            st.info("No records yet for this Main Category.")
+        else:
+            st.dataframe(table, use_container_width=True, hide_index=True)
+
+    _render_selected_summary_download(tables, selected)
+
+    # New: Item Summary Report (merged-cell layout, CSV + PDF).
+    render_item_summary_report(df_all, selected)
 
 
 def render_purchase_details(df_office, office):
