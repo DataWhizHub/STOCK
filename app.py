@@ -1550,7 +1550,7 @@ def _selected_summary_xlsx_bytes(tables: dict) -> bytes:
 
     thin = Side(style="thin", color="000000")
     border = Border(left=thin, right=thin, top=thin, bottom=thin)
-    stock_cols = {"Chilaw Stock", "Palavi Stock", "Total Stock"}
+    stock_cols = {"Chilaw", "Palavi", "Total"}
     widths = {}
 
     row_idx = 1
