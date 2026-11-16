@@ -1731,11 +1731,14 @@ def _item_report_layout(grouped, show_veh: bool, main_cat: str = ""):
         Papers and Tape & Tube Main Categories where it is left out.
       - Total Stock (combined stock of each Sub Category 2) is shown
         for the Filters Main Category only.
+      - Sub Category 2 is left out when no row of this Main Category
+        has a Sub Category 2 value.
       - Sub Category 3 is left out when no row of this Main Category
         has a Sub Category 3 value.
     Returns (headers, rows, sub1_spans, sub2_spans, show_veh); rows have
     the merged cells filled only on the first row of a group, spans are
     lists of [first_row, last_row] (0-based, data rows)."""
+    show_sub2 = bool(grouped["Sub Category 2"].astype(str).str.strip().ne("").any())
     show_sub3 = bool(grouped["Sub Category 3"].astype(str).str.strip().ne("").any())
     show_total_stock = main_cat.strip().lower() == "filters"
     show_uom = not _item_report_hide_uom(main_cat)
@@ -1743,7 +1746,8 @@ def _item_report_layout(grouped, show_veh: bool, main_cat: str = ""):
     headers = ["Sub Category 1"]
     if show_veh:
         headers.append("Vehicles")
-    headers.append("Sub Category 2")
+    if show_sub2:
+        headers.append("Sub Category 2")
     if show_total_stock:
         headers.append("Total Stock")
     if show_sub3:
@@ -1773,7 +1777,8 @@ def _item_report_layout(grouped, show_veh: bool, main_cat: str = ""):
         row = [k1 if new1 else ""]
         if show_veh:
             row.append(rec["Vehicles"] if new2 else "")
-        row.append(rec["Sub Category 2"] if new2 else "")
+        if show_sub2:
+            row.append(rec["Sub Category 2"] if new2 else "")
         if show_total_stock:
             row.append(_fmt_num(rec["Sub2 Total"]) if new2 else "")
         if show_sub3:
@@ -1920,8 +1925,11 @@ def _item_report_pdf_bytes(blocks: dict) -> bytes:
                 cmds.append(("SPAN", (0, s + 1), (0, e + 1)))
 
         # Vehicles / Sub Category 2 / Total Stock (when present) merged down each
-        # Sub Category 2 group (UOM is not merged).
-        merge_names = (["Vehicles"] if show_veh else []) + ["Sub Category 2"]
+        # Sub Category 2 group (UOM is not merged). Sub Category 2 may be absent
+        # when the Main Category doesn't use it.
+        merge_names = (["Vehicles"] if show_veh else [])
+        if "Sub Category 2" in headers:
+            merge_names.append("Sub Category 2")
         if "Total Stock" in headers:
             merge_names.append("Total Stock")
         merge_cols = [headers.index(h) for h in merge_names]
