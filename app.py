@@ -1519,12 +1519,27 @@ def _selected_item_summary_table(df_all, main_cat: str):
     grouped["Total Stock"] = grouped[OFFICES].sum(axis=1)
     grouped = grouped.reset_index()
 
+    # Latest UOM stored for each Sub Category 1 / 2 / 3 combination
+    # (most recent entry by Date, then Timestamp, that has a UOM filled in).
+    key_cols = ["Sub Category 1", "Sub Category 2", "Sub Category 3"]
+    df_uom = df_cat[df_cat["UOM"].astype(str).str.strip() != ""].copy()
+    if df_uom.empty:
+        grouped["UOM"] = ""
+    else:
+        df_uom["_ts"] = pd.to_datetime(df_uom["Timestamp"], errors="coerce")
+        df_uom = df_uom.sort_values(["Date", "_ts"], kind="stable")
+        latest_uom = df_uom.groupby(key_cols)["UOM"].last().reset_index()
+        grouped = grouped.merge(latest_uom, on=key_cols, how="left")
+        grouped["UOM"] = grouped["UOM"].fillna("")
+
     columns = list(SUMMARY_COLUMNS)
     # The Vehicles column (looked up by Sub Category 2) is only shown for
     # the Filters Main Category, as the 2nd column.
     if main_cat.strip().lower() == "filters":
         grouped["Vehicles"] = grouped["Sub Category 2"].map(load_vehicle_map()).fillna("")
         columns.insert(1, "Vehicles")
+    # UOM is always the 3rd column.
+    columns.insert(2, "UOM")
 
     display_df = grouped.rename(columns={"Chilaw": "Chilaw Stock", "Palavi": "Palavi Stock"})
     display_df = display_df[columns]
@@ -1588,7 +1603,7 @@ def _selected_summary_xlsx_bytes(tables: dict) -> bytes:
                     widths[c] = max(widths.get(c, 0), len(str(val)) + 2)
             row_idx += 1
 
-    for c in range(1, 9):
+    for c in range(1, 10):
         ws.column_dimensions[get_column_letter(c)].width = min(max(widths.get(c, 9), 9), 45)
 
     buf = io.BytesIO()
