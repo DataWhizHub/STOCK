@@ -1727,8 +1727,10 @@ def _item_report_layout(grouped, show_veh: bool, main_cat: str = ""):
     where Sub Category 1 is merged down its group, and Vehicles /
     Sub Category 2 / Total Stock are merged down each Sub Category 2
     group. Rules:
-      - UOM is the 3rd column (one value per row), except for the Sand
-        Papers and Tape & Tube Main Categories where it is left out.
+      - The last four columns are always Chilaw, Palavi, Total, Order.
+      - UOM is the 3rd column (one value per row) when there are enough
+        columns before Chilaw, otherwise it sits right before Chilaw.
+        It is left out for the Sand Papers and Tape & Tube Main Categories.
       - Total Stock (combined stock of each Sub Category 2) is shown
         for the Filters Main Category only.
       - Sub Category 2 is left out when no row of this Main Category
@@ -1753,8 +1755,11 @@ def _item_report_layout(grouped, show_veh: bool, main_cat: str = ""):
     if show_sub3:
         headers.append("Sub Category 3")
     headers += ["Chilaw", "Palavi", "Total", "Order"]
+
+    # UOM goes in the 3rd column, but never after Chilaw / Palavi / Total / Order.
+    uom_pos = min(2, len(headers) - 4)
     if show_uom:
-        headers.insert(2, "UOM")  # UOM is the 3rd column
+        headers.insert(uom_pos, "UOM")
 
     rows, sub1_spans, sub2_spans = [], [], []
     prev1, prev2 = None, None
@@ -1790,7 +1795,7 @@ def _item_report_layout(grouped, show_veh: bool, main_cat: str = ""):
             "",
         ]
         if show_uom:
-            row.insert(2, rec["UOM"])  # UOM is the 3rd column
+            row.insert(uom_pos, rec["UOM"])
         rows.append(row)
 
     return headers, rows, sub1_spans, sub2_spans, show_veh
@@ -1821,7 +1826,7 @@ table.irp-table td.b { font-weight: 700; }
         for h, v in zip(headers, row):
             if h == "Sub Category 1":
                 if i in s1_len:
-                    tr += f'<td rowspan="{s1_len[i]}">{_esc(v)}</td>'
+                    tr += f'<td rowspan="{s1_len[i]}" class="l">{_esc(v)}</td>'
             elif h in ("Vehicles", "Sub Category 2", "Total Stock"):
                 if i in s2_len:
                     cls = ' class="l"' if h == "Vehicles" else ""
@@ -1885,7 +1890,7 @@ def _item_report_pdf_bytes(blocks: dict) -> bytes:
         "Sub Category 1": 1.0, "Vehicles": 2.1, "UOM": 0.6, "Sub Category 2": 1.1, "Total Stock": 0.8,
         "Sub Category 3": 1.1, "Chilaw": 0.7, "Palavi": 0.7, "Total": 0.7, "Order": 0.8,
     }
-    left_cols = {"Vehicles", "Sub Category 3"}
+    left_cols = {"Sub Category 1", "Vehicles", "Sub Category 3"}
     bold_cols = {"Total"}
 
     story = [
