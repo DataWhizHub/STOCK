@@ -1709,28 +1709,48 @@ def _item_report_show_vehicles(grouped, main_cat: str) -> bool:
     return bool(grouped["Vehicles"].astype(str).str.strip().ne("").any())
 
 
-def _item_report_layout(grouped, show_veh: bool):
+def _item_report_hide_uom(main_cat: str) -> bool:
+    """The UOM column is not shown in the Item Summary Report for the
+    Sand Papers (Water Mart) and Tape & Tube Main Categories."""
+    name = re.sub(r"\s+", " ", (main_cat or "").strip().lower())
+    if "sand paper" in name or "sandpaper" in name:
+        return True
+    if "tape" in name and "tube" in name:
+        return True
+    return False
+
+
+def _item_report_layout(grouped, show_veh: bool, main_cat: str = ""):
     """Turns the grouped data into the report layout:
-    Sub Category 1 | Vehicles | UOM | Sub Category 2 | Sub Category 3 |
-    Chilaw | Palavi | Total | Order
+    Sub Category 1 | Vehicles | UOM | Sub Category 2 | Total Stock |
+    Sub Category 3 | Chilaw | Palavi | Total | Order
     where Sub Category 1 is merged down its group, and Vehicles /
-    Sub Category 2 are merged down each Sub Category 2 group. UOM is
-    always the 3rd column (one value per row). The Sub Category 3
-    column is left out when no row of this Main Category has a Sub
-    Category 3 value. Returns (headers, rows, sub1_spans, sub2_spans,
-    show_veh); rows have the merged cells filled only on the first row
-    of a group, spans are lists of [first_row, last_row] (0-based, data
-    rows)."""
+    Sub Category 2 / Total Stock are merged down each Sub Category 2
+    group. Rules:
+      - UOM is the 3rd column (one value per row), except for the Sand
+        Papers and Tape & Tube Main Categories where it is left out.
+      - Total Stock (combined stock of each Sub Category 2) is shown
+        for the Filters Main Category only.
+      - Sub Category 3 is left out when no row of this Main Category
+        has a Sub Category 3 value.
+    Returns (headers, rows, sub1_spans, sub2_spans, show_veh); rows have
+    the merged cells filled only on the first row of a group, spans are
+    lists of [first_row, last_row] (0-based, data rows)."""
     show_sub3 = bool(grouped["Sub Category 3"].astype(str).str.strip().ne("").any())
+    show_total_stock = main_cat.strip().lower() == "filters"
+    show_uom = not _item_report_hide_uom(main_cat)
 
     headers = ["Sub Category 1"]
     if show_veh:
         headers.append("Vehicles")
     headers.append("Sub Category 2")
+    if show_total_stock:
+        headers.append("Total Stock")
     if show_sub3:
         headers.append("Sub Category 3")
     headers += ["Chilaw", "Palavi", "Total", "Order"]
-    headers.insert(2, "UOM")  # UOM is always the 3rd column
+    if show_uom:
+        headers.insert(2, "UOM")  # UOM is the 3rd column
 
     rows, sub1_spans, sub2_spans = [], [], []
     prev1, prev2 = None, None
@@ -1754,6 +1774,8 @@ def _item_report_layout(grouped, show_veh: bool):
         if show_veh:
             row.append(rec["Vehicles"] if new2 else "")
         row.append(rec["Sub Category 2"] if new2 else "")
+        if show_total_stock:
+            row.append(_fmt_num(rec["Sub2 Total"]) if new2 else "")
         if show_sub3:
             row.append(rec["Sub Category 3"])
         row += [
@@ -1762,7 +1784,8 @@ def _item_report_layout(grouped, show_veh: bool):
             _fmt_num(rec["Total"]),
             "",
         ]
-        row.insert(2, rec["UOM"])  # UOM is always the 3rd column
+        if show_uom:
+            row.insert(2, rec["UOM"])  # UOM is the 3rd column
         rows.append(row)
 
     return headers, rows, sub1_spans, sub2_spans, show_veh
@@ -1794,7 +1817,7 @@ table.irp-table td.b { font-weight: 700; }
             if h == "Sub Category 1":
                 if i in s1_len:
                     tr += f'<td rowspan="{s1_len[i]}">{_esc(v)}</td>'
-            elif h in ("Vehicles", "Sub Category 2"):
+            elif h in ("Vehicles", "Sub Category 2", "Total Stock"):
                 if i in s2_len:
                     cls = ' class="l"' if h == "Vehicles" else ""
                     tr += f'<td rowspan="{s2_len[i]}"{cls}>{_esc(v)}</td>'
@@ -1854,7 +1877,7 @@ def _item_report_pdf_bytes(blocks: dict) -> bytes:
     cell_h = ParagraphStyle("irp_h", parent=cell_c, fontName="Helvetica-Bold")
 
     weights = {
-        "Sub Category 1": 1.0, "Vehicles": 2.1, "UOM": 0.6, "Sub Category 2": 1.1,
+        "Sub Category 1": 1.0, "Vehicles": 2.1, "UOM": 0.6, "Sub Category 2": 1.1, "Total Stock": 0.8,
         "Sub Category 3": 1.1, "Chilaw": 0.7, "Palavi": 0.7, "Total": 0.7, "Order": 0.8,
     }
     left_cols = {"Vehicles", "Sub Category 3"}
@@ -1896,9 +1919,11 @@ def _item_report_pdf_bytes(blocks: dict) -> bytes:
             if e > s:
                 cmds.append(("SPAN", (0, s + 1), (0, e + 1)))
 
-        # Vehicles / Sub Category 2 merged down each Sub Category 2 group
-        # (UOM sits between them and is not merged).
+        # Vehicles / Sub Category 2 / Total Stock (when present) merged down each
+        # Sub Category 2 group (UOM is not merged).
         merge_names = (["Vehicles"] if show_veh else []) + ["Sub Category 2"]
+        if "Total Stock" in headers:
+            merge_names.append("Total Stock")
         merge_cols = [headers.index(h) for h in merge_names]
         for s, e in sub2_spans:
             if e > s:
@@ -1925,7 +1950,7 @@ def render_item_summary_report(df_all, selected: list):
         if grouped is None:
             continue
         show_veh = _item_report_show_vehicles(grouped, main_cat)
-        blocks[main_cat] = _item_report_layout(grouped, show_veh)
+        blocks[main_cat] = _item_report_layout(grouped, show_veh, main_cat)
 
     if not blocks:
         st.info("No records yet for the selected Main Categories.")
