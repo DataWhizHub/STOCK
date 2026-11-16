@@ -1659,8 +1659,8 @@ def _render_selected_summary_download(tables: dict, selected: list):
 def _item_report_data(df_all, main_cat: str):
     """One row per Sub Category 1 / 2 / 3 combination for a Main Category
     with Chilaw, Palavi and Total stock, the Vehicles lookup (by Sub
-    Category 2) and the combined 'Total Stock' of each Sub Category 2.
-    Returns None if the category has no records."""
+    Category 2), the latest UOM and the combined 'Total Stock' of each
+    Sub Category 2. Returns None if the category has no records."""
     df_cat = df_all[df_all["Main Category"] == main_cat].copy()
     if df_cat.empty:
         return None
@@ -1677,6 +1677,19 @@ def _item_report_data(df_all, main_cat: str):
             grouped[off] = 0.0
     grouped["Total"] = grouped[OFFICES].sum(axis=1)
     grouped = grouped.reset_index()
+
+    # Latest UOM stored for each Sub Category 1 / 2 / 3 combination
+    # (most recent entry by Date, then Timestamp, that has a UOM filled in).
+    key_cols = ["Sub Category 1", "Sub Category 2", "Sub Category 3"]
+    df_uom = df_cat[df_cat["UOM"].astype(str).str.strip() != ""].copy()
+    if df_uom.empty:
+        grouped["UOM"] = ""
+    else:
+        df_uom["_ts"] = pd.to_datetime(df_uom["Timestamp"], errors="coerce")
+        df_uom = df_uom.sort_values(["Date", "_ts"], kind="stable")
+        latest_uom = df_uom.groupby(key_cols)["UOM"].last().reset_index()
+        grouped = grouped.merge(latest_uom, on=key_cols, how="left")
+        grouped["UOM"] = grouped["UOM"].fillna("")
 
     grouped = grouped.sort_values(
         ["Sub Category 1", "Sub Category 2", "Sub Category 3"],
@@ -1698,17 +1711,19 @@ def _item_report_show_vehicles(grouped, main_cat: str) -> bool:
 
 def _item_report_layout(grouped, show_veh: bool):
     """Turns the grouped data into the report layout:
-    Sub Category 1 | Vehicles | Sub Category 2 | Total Stock |
+    Sub Category 1 | Vehicles | UOM | Sub Category 2 | Total Stock |
     Sub Category 3 | Chilaw | Palavi | Total | Order
     where Sub Category 1 is merged down its group, and Vehicles /
     Sub Category 2 / Total Stock are merged down each Sub Category 2
-    group. Returns (headers, rows, sub1_spans, sub2_spans, show_veh);
-    rows have the merged cells filled only on the first row of a group,
-    spans are lists of [first_row, last_row] (0-based, data rows)."""
+    group. UOM is always the 3rd column (one value per row). Returns
+    (headers, rows, sub1_spans, sub2_spans, show_veh); rows have the
+    merged cells filled only on the first row of a group, spans are
+    lists of [first_row, last_row] (0-based, data rows)."""
     headers = ["Sub Category 1"]
     if show_veh:
         headers.append("Vehicles")
     headers += ["Sub Category 2", "Total Stock", "Sub Category 3", "Chilaw", "Palavi", "Total", "Order"]
+    headers.insert(2, "UOM")  # UOM is always the 3rd column
 
     rows, sub1_spans, sub2_spans = [], [], []
     prev1, prev2 = None, None
@@ -1740,6 +1755,7 @@ def _item_report_layout(grouped, show_veh: bool):
             _fmt_num(rec["Total"]),
             "",
         ]
+        row.insert(2, rec["UOM"])  # UOM is always the 3rd column
         rows.append(row)
 
     return headers, rows, sub1_spans, sub2_spans, show_veh
@@ -1831,7 +1847,7 @@ def _item_report_pdf_bytes(blocks: dict) -> bytes:
     cell_h = ParagraphStyle("irp_h", parent=cell_c, fontName="Helvetica-Bold")
 
     weights = {
-        "Sub Category 1": 1.0, "Vehicles": 2.1, "Sub Category 2": 1.1, "Total Stock": 0.8,
+        "Sub Category 1": 1.0, "Vehicles": 2.1, "UOM": 0.6, "Sub Category 2": 1.1, "Total Stock": 0.8,
         "Sub Category 3": 1.1, "Chilaw": 0.7, "Palavi": 0.7, "Total": 0.7, "Order": 0.8,
     }
     left_cols = {"Vehicles", "Sub Category 3"}
@@ -1873,12 +1889,13 @@ def _item_report_pdf_bytes(blocks: dict) -> bytes:
             if e > s:
                 cmds.append(("SPAN", (0, s + 1), (0, e + 1)))
 
-        # Vehicles / Sub Category 2 / Total Stock merged down each Sub Category 2 group.
-        first_col = headers.index("Vehicles") if show_veh else headers.index("Sub Category 2")
-        last_col = headers.index("Total Stock")
+        # Vehicles / Sub Category 2 / Total Stock merged down each Sub Category 2 group
+        # (UOM sits between them and is not merged).
+        merge_names = (["Vehicles"] if show_veh else []) + ["Sub Category 2", "Total Stock"]
+        merge_cols = [headers.index(h) for h in merge_names]
         for s, e in sub2_spans:
             if e > s:
-                for c in range(first_col, last_col + 1):
+                for c in merge_cols:
                     cmds.append(("SPAN", (c, s + 1), (c, e + 1)))
 
         story.append(Table(data, colWidths=col_w, repeatRows=1, style=TableStyle(cmds)))
@@ -1893,7 +1910,7 @@ def render_item_summary_report(df_all, selected: list):
     offers it as CSV and PDF."""
     st.divider()
     st.markdown("### 📑 Item Summary Report")
-    st.caption("Sub Category 1 → Vehicles → Sub Category 2 → Sub Category 3 with Chilaw / Palavi / Total stock")
+    st.caption("Sub Category 1 → Vehicles → UOM → Sub Category 2 → Sub Category 3 with Chilaw / Palavi / Total stock")
 
     blocks = {}
     for main_cat in selected:
